@@ -14,9 +14,13 @@
     "KBD", "SAMP", "SVG", "MATH", "INPUT", "SELECT", "OPTION",
   ]);
 
-  // 한 번의 API 호출에 담을 최대 세그먼트 수 / 최대 문자 수.
-  const MAX_SEGMENTS_PER_BATCH = 40;
-  const MAX_CHARS_PER_BATCH = 3000;
+  // 한 번의 API 호출에 담을 최대 세그먼트 수 / 최대 문자 수(둘 다 설정으로 조정 가능).
+  // 배치는 두 상한 중 먼저 도달하는 쪽에서 끊김. 느린 모델은 배치를 작게 하면
+  // 배치당 응답이 빨라져 타임아웃 위험이 줄어듦.
+  const DEFAULT_BATCH_SIZE = 40;
+  const DEFAULT_MAX_CHARS = 3000;
+  let maxSegmentsPerBatch = DEFAULT_BATCH_SIZE;
+  let maxCharsPerBatch = DEFAULT_MAX_CHARS;
 
   // 스캔/플러시 디바운스 지연(ms).
   const DEBOUNCE_MS = 250;
@@ -33,6 +37,69 @@
   let mo = null; // MutationObserver
   let scanTimer = null;
   let flushTimer = null;
+
+  /**
+   * 배치 크기 후보값을 검증해 유효하면 적용함(1~100 범위의 정수).
+   *
+   * @param {*} value - 저장소에서 읽은 batchSize 값.
+   */
+  function applyBatchSize(value) {
+    const n = Number(value);
+    if (Number.isInteger(n) && n >= 1 && n <= 100) maxSegmentsPerBatch = n;
+  }
+
+  /**
+   * 문자 수 캡 후보값을 검증해 유효하면 적용함(500~20000 범위의 정수).
+   *
+   * @param {*} value - 저장소에서 읽은 maxChars 값.
+   */
+  function applyMaxChars(value) {
+    const n = Number(value);
+    if (Number.isInteger(n) && n >= 500 && n <= 20000) maxCharsPerBatch = n;
+  }
+
+  // 디버그 로그 / 배치 크기 / 문자 수 캡. 저장소에서 읽고, 팝업에서 변경되면 실시간 반영함.
+  let debug = false;
+  chrome.storage.local.get(["debug", "batchSize", "maxChars"]).then(
+    ({ debug: d, batchSize, maxChars }) => {
+      debug = Boolean(d);
+      applyBatchSize(batchSize);
+      applyMaxChars(maxChars);
+    },
+  );
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area !== "local") return;
+    if (changes.debug) debug = Boolean(changes.debug.newValue);
+    if (changes.batchSize) applyBatchSize(changes.batchSize.newValue);
+    if (changes.maxChars) applyMaxChars(changes.maxChars.newValue);
+  });
+
+  /**
+   * 디버그 로그를 출력함(debug 가 켜져 있을 때만).
+   *
+   * @param {string} location - 로그 위치.
+   * @param {string} message - 로그 메시지(영문).
+   * @param {*} [data] - 부가 데이터(선택).
+   */
+  function log(location, message, data) {
+    if (!debug) return;
+    const line = `[ai_translator ${new Date().toISOString()}] [${location}] ${message}`;
+    if (data !== undefined) console.debug(line, data);
+    else console.debug(line);
+  }
+
+  /**
+   * 오류 로그를 출력함. 메시지는 항상 출력하고, 부가 데이터는 debug 일 때만 출력함.
+   *
+   * @param {string} location - 로그 위치.
+   * @param {string} message - 오류 메시지(영문).
+   * @param {*} [data] - 진단용 부가 데이터(원문/응답 등, debug 시에만 출력).
+   */
+  function logError(location, message, data) {
+    const line = `[ai_translator ${new Date().toISOString()}] [${location}] ${message}`;
+    if (debug && data !== undefined) console.error(line, data);
+    else console.error(line);
+  }
 
   /**
    * 텍스트 노드가 번역 대상인지 판별함.
@@ -153,8 +220,8 @@
     for (const n of nodes) {
       const len = n.nodeValue.trim().length;
       if (
-        current.length >= MAX_SEGMENTS_PER_BATCH ||
-        (current.length > 0 && chars + len > MAX_CHARS_PER_BATCH)
+        current.length >= maxSegmentsPerBatch ||
+        (current.length > 0 && chars + len > maxCharsPerBatch)
       ) {
         batches.push(current);
         current = [];
@@ -175,18 +242,22 @@
   async function translateBatch(nodes) {
     // 앞뒤 공백을 보존하기 위해 트림된 원문만 전송하고, 치환 시 다시 붙임.
     const segments = nodes.map((n) => n.nodeValue.trim());
+    log("content/translateBatch", `sending ${segments.length} segments`, segments);
 
     let resp;
     try {
       resp = await chrome.runtime.sendMessage({ type: "translate-batch", segments });
     } catch (err) {
       // 서비스 워커 미응답 등
+      logError("content/translateBatch", `sendMessage failed: ${err.message}`);
       showToast(`번역 오류: ${err.message}`, "error");
       return;
     }
 
     if (!resp || resp.error) {
-      showToast(`번역 오류: ${resp?.error ?? "알 수 없는 오류"}`, "error");
+      const reason = resp?.error ?? "알 수 없는 오류(서비스 워커 무응답)";
+      logError("content/translateBatch", `provider error: ${reason}`, { segments });
+      showToast(`번역 오류: ${reason}`, "error");
       // 오류가 발생하면 세션을 멈춰 반복 실패/과금을 방지함.
       stopTranslation();
       return;
@@ -194,7 +265,15 @@
 
     const { translations } = resp;
     if (!Array.isArray(translations) || translations.length !== nodes.length) {
-      showToast("번역 응답 형식이 올바르지 않습니다.", "error");
+      // 개수 불일치는 세션을 멈추지 않고 이 배치만 건너뜀(다음 배치는 정상일 수 있음).
+      logError(
+        "content/translateBatch",
+        `bad response shape: expected ${nodes.length}, got ${
+          Array.isArray(translations) ? translations.length : typeof translations
+        }`,
+        { segments, translations },
+      );
+      showToast("번역 응답 형식이 올바르지 않습니다(이 부분은 건너뜁니다).", "error");
       return;
     }
 
@@ -206,6 +285,7 @@
       translated.add(n);
     });
 
+    log("content/translateBatch", `applied ${translations.length} translations`);
     showToast("번역 중…", "info");
   }
 
@@ -246,7 +326,9 @@
   let toastTimer = null;
 
   /**
-   * 페이지 우하단에 상태 메시지를 잠시 표시함.
+   * 페이지 우하단에 상태 메시지를 표시함.
+   * info 메시지는 잠시 후 자동으로 사라지고, error 메시지는 진단을 놓치지 않도록
+   * 자동으로 사라지지 않으며 클릭하면 닫힘.
    *
    * @param {string} text - 표시할 메시지.
    * @param {"info"|"error"} [kind] - 메시지 종류(색상 구분용).
@@ -269,16 +351,28 @@
         boxShadow: "0 4px 16px rgba(0,0,0,.25)",
         pointerEvents: "none",
       });
+      // 오류 토스트를 클릭하면 즉시 닫히도록 함.
+      toastEl.addEventListener("click", () => {
+        toastEl.style.opacity = "0";
+      });
       document.documentElement.appendChild(toastEl);
     }
-    toastEl.textContent = text;
-    toastEl.style.background = kind === "error" ? "#b91c1c" : "#1f2937";
+
+    const isError = kind === "error";
+    toastEl.textContent = isError ? `${text} (클릭하여 닫기)` : text;
+    toastEl.title = isError ? "클릭하여 닫기" : "";
+    toastEl.style.background = isError ? "#b91c1c" : "#1f2937";
     toastEl.style.opacity = "1";
+    // 오류일 때만 클릭 가능(닫기)하도록 포인터 이벤트를 켬.
+    toastEl.style.pointerEvents = isError ? "auto" : "none";
+    toastEl.style.cursor = isError ? "pointer" : "default";
 
     if (toastTimer) clearTimeout(toastTimer);
+    // 오류는 자동으로 숨기지 않음(사용자가 확인/클릭할 때까지 유지).
+    if (isError) return;
     toastTimer = setTimeout(() => {
       if (toastEl) toastEl.style.opacity = "0";
-    }, kind === "error" ? 6000 : 1500);
+    }, 1500);
   }
 
   // ── 팝업 → 콘텐츠 스크립트 메시지 처리 ──────────────────────────────────

@@ -8,7 +8,7 @@
   </head>
   <body>
     <header class="topbar">
-      <div class="brand-mark" aria-hidden="true">역</div>
+      <img class="brand-mark" src="icons/icon128.png" alt="AI 페이지 번역기 아이콘">
       <div>
         <p class="product-name">AI 페이지 번역기</p>
         <h1>한국어 번역</h1>
@@ -28,6 +28,7 @@
           <span>프로바이더</span>
           <select id="provider">
             <option value="openai">OpenAI</option>
+            <option value="openrouter">OpenRouter</option>
           </select>
         </label>
 
@@ -52,9 +53,42 @@
         </label>
 
         <label class="field">
+          <span>추론 강도 (reasoning · 낮을수록 빠름)</span>
+          <select id="reasoning-effort">
+            <option value="none">없음 (권장 · 추론 비활성 · 가장 빠름)</option>
+            <option value="minimal">최소</option>
+            <option value="low">낮음</option>
+            <option value="default">모델 기본값 (파라미터 미전송)</option>
+          </select>
+        </label>
+
+        <label class="field">
           <span>용어집 (한 줄에 하나: <code>원문=번역</code>)</span>
           <textarea id="glossary" rows="4" autocomplete="off" spellcheck="false"
                     placeholder="Sam Altman=샘 올트먼&#10;Elon Musk=일론 머스크"></textarea>
+        </label>
+
+        <label class="field">
+          <span>배치 크기 (한 요청당 세그먼트 수, 1~100)</span>
+          <input id="batch-size" type="number" min="1" max="100" step="1"
+                 inputmode="numeric" placeholder="예: 40 (느린 모델은 작게)">
+        </label>
+
+        <label class="field">
+          <span>배치 문자 수 캡 (한 요청당 최대 문자, 500~20000)</span>
+          <input id="max-chars" type="number" min="500" max="20000" step="100"
+                 inputmode="numeric" placeholder="예: 3000 (세그먼트 수와 함께 먼저 도달하는 쪽 적용)">
+        </label>
+
+        <label class="field">
+          <span>요청 타임아웃 (초, 10~300 · 초과 시 재시도 없이 실패)</span>
+          <input id="timeout-sec" type="number" min="10" max="300" step="5"
+                 inputmode="numeric" placeholder="예: 60">
+        </label>
+
+        <label class="field-check">
+          <input id="debug" type="checkbox">
+          <span>디버그 로그 (콘솔에 요청·응답 상세 출력)</span>
         </label>
 
         <button id="save-button" class="secondary-button" type="button">설정 저장</button>
