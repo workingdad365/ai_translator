@@ -4,32 +4,50 @@
 // 엔드포인트/추가 헤더만 지정하는 얇은 래퍼로 구성함.
 
 // 번역 지시용 시스템 프롬프트의 공통 기본 규칙.
+// 각 세그먼트는 블록 요소(p, li, h1~h6 등)의 innerHTML 조각이며, 문장 중간에
+// <a>/<em>/<strong> 등 인라인 태그가 섞여 있을 수 있음. 텍스트만 한국어로
+// 번역하고 태그/속성은 그대로 보존하되, 한국어 어순에 맞게 태그 위치를 옮기도록
+// 지시함. 이렇게 해야 인라인 태그로 쪼개진 한 문장이 조각나지 않고 자연스럽게 번역됨.
 // 세그먼트를 배열이 아닌 "인덱스 키" 객체로 주고받아, 모델이 세그먼트를 병합/분할/
 // 누락해도 키 기준으로 원문과 정렬을 유지할 수 있게 함(개수 어긋남으로 인한 배치
 // 전체 폐기 방지).
 const BASE_RULES = [
-  "You are a professional translator.",
-  "Translate every text segment into natural, fluent Korean.",
-  "Keep the original meaning, numbers, URLs, and any markup-like tokens unchanged.",
+  "You are a professional translator specializing in web page content.",
+  "Each segment is an HTML fragment (the inner HTML of a single block element). " +
+    "It may be plain text, or it may contain inline tags such as <a>, <em>, <strong>, <span>, <code>, <sup>, <br>.",
+  "Translate the human-readable text into natural, fluent Korean, treating the WHOLE fragment as one continuous sentence/paragraph. " +
+    "Do NOT translate each tag's text in isolation — read across the tags so the result reads naturally.",
+  "Preserve every HTML tag and ALL of its attributes (href, class, id, data-*, etc.) EXACTLY as given. " +
+    "Never translate, rename, reorder, or drop attributes or their values (especially URLs).",
+  "Korean word order differs from English, so you MUST move each inline tag to wrap the Korean words that correspond to the " +
+    "SAME content it originally wrapped. Example: `Meta has <a href=\"x\">deactivated</a> the tool` -> " +
+    "`메타는 그 도구를 <a href=\"x\">비활성화</a>했다`. Keep the tag balanced (matching open/close) and around the translated equivalent.",
+  "Do NOT translate or alter the text inside <code> elements, and leave numbers, URLs, and untranslatable proper nouns unchanged.",
+  "Do NOT add any tags, wrappers, code fences, or attributes that were not in the input.",
   'The input is a JSON object of the form {"segments": {"0": "...", "1": "...", ...}} whose keys are string indices.',
   'Return ONLY a JSON object of the form {"translations": {"0": "...", "1": "...", ...}}.',
-  "The translations object MUST use EXACTLY the same set of keys as the input segments — one translation value per key.",
-  "Translate each segment value INDEPENDENTLY and keep it under its own key. A segment may be a sentence fragment " +
-    "(e.g. link text split out from the surrounding sentence); translate it on its own without borrowing text from other keys.",
+  "The translations object MUST use EXACTLY the same set of keys as the input segments — one translated HTML fragment per key.",
   "NEVER merge multiple segments into one, split one segment into several, drop a key, add new keys, or leave a value empty.",
-  "If a segment is already Korean or should not be translated (e.g. code, a bare number), return it unchanged under its key.",
+  "If a segment is already Korean or should not be translated (e.g. only code or a bare number), return it unchanged under its key.",
   "Do not add any explanation or extra keys.",
 ];
 
 // 말투(문체) 지침. 페이지 전체가 여러 배치로 나뉘어 번역되므로, 모든 배치에
 // 동일한 말투 지침을 적용해야 존댓말/반말이 섞이지 않고 일관성이 유지됨.
 const TONE_INSTRUCTIONS = {
-  // 반말(해체/해라체): 신문 기사 문체에 가까운 일관된 평서형.
+  // 반말(해라체): 친구에게 말하는 구어체가 아니라, 한국 신문·통신사 기사에서 쓰는
+  // 객관적 문어체 평서형(해라체). 구어체 종결어미(~야, ~해)와 속어를 금지하고,
+  // 2인칭 'you'는 반말 호칭(너/네) 대신 '당신' 또는 무주어로 처리하도록 지시함.
   banmal:
-    "Write ALL translations in casual, informal Korean (반말). " +
-    "Use plain declarative endings such as ~다, ~이다, ~였다, ~한다, ~야, ~해. " +
-    "Never use polite/formal endings (존댓말) such as ~습니다, ~합니다, ~에요, ~예요, ~이에요, ~세요. " +
-    "Keep the tone consistent across every segment.",
+    "Write ALL translations in the style of a Korean NEWS ARTICLE — the objective, formal written " +
+    "declarative style (문어체 해라체) used by newspapers and news agencies. This is NOT casual speech. " +
+    "Use written declarative endings such as ~다, ~이다, ~였다, ~했다, ~한다, ~라고 밝혔다, ~것으로 알려졌다. " +
+    "NEVER use colloquial/conversational endings or particles such as ~야, ~해, ~거야, ~네, ~지, ~잖아, " +
+    "and NEVER use slang or a chatty, talking-to-a-friend tone. " +
+    "Never use polite/formal-speech endings (존댓말) such as ~습니다, ~합니다, ~에요, ~예요, ~이에요, ~세요. " +
+    "For the English second person ('you', 'your', 'yourself'), do NOT use 너/네/니; render it as '당신'/'당신의', " +
+    "or omit the subject/possessive entirely when that reads more naturally, as Korean news writing commonly does. " +
+    "Keep the tone objective and consistent across every segment.",
   // 존댓말(합쇼체): 정중한 격식체.
   jondaenmal:
     "Write ALL translations in polite, formal Korean (존댓말), " +

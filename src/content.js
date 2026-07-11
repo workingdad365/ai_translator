@@ -1,6 +1,10 @@
 // 콘텐츠 스크립트
 // 팝업의 "번역 시작" 신호를 받아 현재 페이지의 텍스트를 한국어로 치환함.
-// - 뷰포트에 들어오는 텍스트만 순차적으로 번역함(IntersectionObserver).
+// - 번역 단위는 "leaf 블록 요소"(p, li, h1~h6 등 블록 자식이 없는 블록)이며,
+//   해당 요소의 innerHTML 을 통째로 번역함. 문장 중간에 <a>/<em> 같은 인라인
+//   태그가 섞여 문장이 여러 텍스트 노드로 쪼개져도, 블록 단위로 묶어 하나의
+//   문맥으로 번역하므로 어순이 깨지지 않음.
+// - 뷰포트에 들어오는 블록만 순차적으로 번역함(IntersectionObserver).
 // - 스크롤로 새 영역이 나타나거나 DOM 이 동적으로 추가되면 자동으로 이어서 번역함.
 // 동일 페이지에 스크립트가 중복 주입되어도 한 번만 초기화되도록 IIFE + 전역 플래그로 보호함.
 
@@ -8,15 +12,29 @@
   if (window.__aiTranslatorLoaded) return;
   window.__aiTranslatorLoaded = true;
 
-  // 번역 대상에서 제외할 태그.
+  // 번역 대상에서 제외할 태그. 이 태그 자체 또는 그 내부 텍스트는 번역하지 않음.
   const SKIP_TAGS = new Set([
     "SCRIPT", "STYLE", "NOSCRIPT", "TEXTAREA", "CODE", "PRE",
     "KBD", "SAMP", "SVG", "MATH", "INPUT", "SELECT", "OPTION",
   ]);
 
-  // 한 번의 API 호출에 담을 최대 세그먼트 수 / 최대 문자 수(둘 다 설정으로 조정 가능).
-  // 배치는 두 상한 중 먼저 도달하는 쪽에서 끊김. 느린 모델은 배치를 작게 하면
-  // 배치당 응답이 빨라져 타임아웃 위험이 줄어듦.
+  // 인라인 요소 태그. 텍스트 노드의 "블록 조상"을 찾을 때 이 태그들은 건너뜀.
+  // 즉, 문장 중간의 <a>/<em>/<strong> 등으로 쪼개진 텍스트 노드들이 같은 블록
+  // 조상(예: <p>)으로 수렴하도록 하여, 한 문장을 하나의 번역 단위로 묶음.
+  const INLINE_TAGS = new Set([
+    "A", "ABBR", "B", "BDI", "BDO", "CITE", "DATA", "DFN", "EM", "I",
+    "MARK", "Q", "RP", "RT", "RUBY", "S", "SMALL", "SPAN", "STRONG",
+    "SUB", "SUP", "TIME", "U", "VAR", "WBR", "FONT", "LABEL", "OUTPUT",
+    "INS", "DEL", "BR", "IMG",
+  ]);
+
+  // 모델 응답 HTML 을 삽입하기 전에 제거할 위험 태그. 프롬프트가 새 태그 추가를
+  // 금지하지만, 방어적으로 스크립트성/외부 로드성 요소를 걷어냄(XSS 방지).
+  const DANGEROUS_TAGS = "script,style,iframe,object,embed,link,meta,base,form";
+
+  // 한 번의 API 호출에 담을 최대 세그먼트(블록) 수 / 최대 문자 수(둘 다 설정으로 조정 가능).
+  // 배치는 두 상한 중 먼저 도달하는 쪽에서 끊김. 문자 수는 블록 innerHTML 길이 기준.
+  // 느린 모델은 배치를 작게 하면 배치당 응답이 빨라져 타임아웃 위험이 줄어듦.
   const DEFAULT_BATCH_SIZE = 40;
   const DEFAULT_MAX_CHARS = 3000;
   let maxSegmentsPerBatch = DEFAULT_BATCH_SIZE;
@@ -25,11 +43,11 @@
   // 스캔/플러시 디바운스 지연(ms).
   const DEBOUNCE_MS = 250;
 
-  const translated = new WeakSet(); // 번역 완료된 텍스트 노드
-  const queued = new WeakSet(); // 큐에 이미 담긴 텍스트 노드(중복 방지)
-  let observedEls = new WeakSet(); // IntersectionObserver 로 관찰 중인 요소(세션 중지 시 교체)
+  const translatedBlocks = new WeakSet(); // 번역 완료된 블록 요소
+  const queuedBlocks = new WeakSet(); // 큐에 이미 담긴 블록 요소(중복 방지)
+  let observedEls = new WeakSet(); // IntersectionObserver 로 관찰 중인 블록(세션 중지 시 교체)
 
-  const pendingNodes = new Set(); // 뷰포트 진입 후 번역 대기 중인 텍스트 노드
+  const pendingBlocks = new Set(); // 뷰포트 진입 후 번역 대기 중인 블록 요소
 
   let active = false; // 번역 세션 활성 여부
   let flushing = false; // 플러시 진행 중 여부(동시 실행 방지)
@@ -102,48 +120,83 @@
   }
 
   /**
-   * 텍스트 노드가 번역 대상인지 판별함.
+   * 텍스트 노드에서 조상을 거슬러 올라가 첫 "블록 조상" 요소를 찾음.
+   * 인라인 태그(INLINE_TAGS)는 통과하므로, 인라인 요소로 쪼개진 텍스트 노드들이
+   * 같은 블록 요소로 수렴함.
    *
-   * @param {Text} node - 검사할 텍스트 노드.
-   * @returns {boolean} 번역 대상이면 true.
+   * @param {Text} node - 시작 텍스트 노드.
+   * @returns {Element|null} 블록 조상 요소. 없으면 null.
    */
-  function isTranslatable(node) {
-    if (translated.has(node) || queued.has(node)) return false;
-    const text = node.nodeValue;
-    if (!text || !/\p{L}/u.test(text)) return false; // 문자가 없는(공백/기호/숫자) 노드 제외
-    const parent = node.parentElement;
-    if (!parent) return false;
-    if (SKIP_TAGS.has(parent.tagName)) return false;
-    if (parent.isContentEditable) return false;
-    if (parent.closest("[translate=no]")) return false;
+  function blockContainer(node) {
+    let el = node.parentElement;
+    if (!el) return null;
+    while (el.parentElement && el !== document.body && INLINE_TAGS.has(el.tagName)) {
+      el = el.parentElement;
+    }
+    return el;
+  }
+
+  /**
+   * 요소가 "leaf 블록"인지 판별함. 즉, 자식 요소 중 블록 레벨 요소가 없고
+   * 인라인 요소만 포함하는 블록. leaf 블록만 innerHTML 을 통째로 번역함.
+   * (블록 자식을 가진 컨테이너는 그 자식 블록들이 각자 번역 단위가 되도록 건너뜀.)
+   *
+   * @param {Element} el - 검사할 요소.
+   * @returns {boolean} leaf 블록이면 true.
+   */
+  function isLeafBlock(el) {
+    for (const child of el.children) {
+      if (!INLINE_TAGS.has(child.tagName)) return false;
+    }
     return true;
   }
 
   /**
-   * 문서 전체를 순회하여 번역 대상 텍스트 노드를 요소 단위로 관찰 등록함.
-   * 관찰 중인 요소가 뷰포트에 진입하면 해당 요소의 텍스트가 번역 큐에 추가됨.
+   * 블록 요소가 번역 대상인지 판별함.
+   *
+   * @param {Element} el - 검사할 블록 요소.
+   * @returns {boolean} 번역 대상이면 true.
+   */
+  function isTranslatableBlock(el) {
+    if (!el || translatedBlocks.has(el) || queuedBlocks.has(el)) return false;
+    if (SKIP_TAGS.has(el.tagName)) return false;
+    if (el.isContentEditable) return false;
+    if (el.closest("[translate=no]")) return false;
+    if (!isLeafBlock(el)) return false; // 블록 자식을 가진 컨테이너는 제외
+    const text = el.textContent;
+    if (!text || !/\p{L}/u.test(text)) return false; // 문자가 없는 블록 제외
+    return true;
+  }
+
+  /**
+   * 문서 전체를 순회하여 번역 대상 leaf 블록을 관찰 등록함.
+   * 관찰 중인 블록이 뷰포트에 진입하면 해당 블록이 번역 큐에 추가됨.
    */
   function scanAndObserve() {
     if (!active || !document.body) return;
 
     const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {
       acceptNode(node) {
-        return isTranslatable(node) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
+        // 문자가 있는 텍스트 노드만 후보로 삼음(공백/기호/숫자뿐인 노드 제외).
+        return node.nodeValue && /\p{L}/u.test(node.nodeValue)
+          ? NodeFilter.FILTER_ACCEPT
+          : NodeFilter.FILTER_REJECT;
       },
     });
 
-    // 텍스트 노드를 부모 요소 단위로 묶음(IntersectionObserver 는 요소만 관찰 가능).
-    const byElement = new Map();
+    // 텍스트 노드를 블록 조상 단위로 집계함(중복 블록은 Set 으로 한 번만).
+    const blocks = new Set();
     let node;
     while ((node = walker.nextNode())) {
-      const el = node.parentElement;
-      if (!byElement.has(el)) byElement.set(el, []);
-      byElement.get(el).push(node);
+      const parent = node.parentElement;
+      // 텍스트의 직접 부모가 제외 태그(code/pre 등)면 건너뜀.
+      if (!parent || SKIP_TAGS.has(parent.tagName)) continue;
+      const block = blockContainer(node);
+      if (block) blocks.add(block);
     }
 
-    for (const [el, nodes] of byElement) {
-      // 요소에 자신이 보유한 대상 텍스트 노드 목록을 부착해 둠.
-      el.__aiTextNodes = nodes;
+    for (const el of blocks) {
+      if (!isTranslatableBlock(el)) continue;
       if (!observedEls.has(el)) {
         observedEls.add(el);
         io.observe(el);
@@ -152,7 +205,7 @@
   }
 
   /**
-   * IntersectionObserver 콜백. 뷰포트에 들어온 요소의 텍스트 노드를 큐에 넣음.
+   * IntersectionObserver 콜백. 뷰포트에 들어온 블록을 큐에 넣음.
    *
    * @param {IntersectionObserverEntry[]} entries - 교차 상태 변경 항목.
    */
@@ -160,20 +213,17 @@
     for (const entry of entries) {
       if (!entry.isIntersecting) continue;
       const el = entry.target;
-      const nodes = el.__aiTextNodes || [];
-      for (const n of nodes) {
-        if (!translated.has(n) && !queued.has(n)) {
-          queued.add(n);
-          pendingNodes.add(n);
-        }
+      if (!translatedBlocks.has(el) && !queuedBlocks.has(el)) {
+        queuedBlocks.add(el);
+        pendingBlocks.add(el);
       }
-      io.unobserve(el); // 한 번 처리한 요소는 관찰 해제
+      io.unobserve(el); // 한 번 처리한 블록은 관찰 해제
       observedEls.delete(el);
     }
     scheduleFlush();
   }
 
-  /** 플러시를 디바운스하여 예약함(짧은 시간에 여러 요소가 진입해도 배치로 묶기 위함). */
+  /** 플러시를 디바운스하여 예약함(짧은 시간에 여러 블록이 진입해도 배치로 묶기 위함). */
   function scheduleFlush() {
     if (flushTimer) clearTimeout(flushTimer);
     flushTimer = setTimeout(flush, DEBOUNCE_MS);
@@ -186,39 +236,40 @@
   }
 
   /**
-   * 대기 중인 텍스트 노드를 배치로 나누어 번역 요청 후 결과로 치환함.
+   * 대기 중인 블록을 배치로 나누어 번역 요청 후 결과로 치환함.
    */
   async function flush() {
-    if (flushing || !active || pendingNodes.size === 0) return;
+    if (flushing || !active || pendingBlocks.size === 0) return;
     flushing = true;
 
     try {
-      const nodes = [...pendingNodes];
-      pendingNodes.clear();
+      const blocks = [...pendingBlocks];
+      pendingBlocks.clear();
 
-      for (const batch of makeBatches(nodes)) {
+      for (const batch of makeBatches(blocks)) {
         if (!active) break;
         await translateBatch(batch);
       }
     } finally {
       flushing = false;
-      // 플러시 중 새로 쌓인 대기 노드가 있으면 이어서 처리함.
-      if (active && pendingNodes.size > 0) scheduleFlush();
+      // 플러시 중 새로 쌓인 대기 블록이 있으면 이어서 처리함.
+      if (active && pendingBlocks.size > 0) scheduleFlush();
     }
   }
 
   /**
-   * 텍스트 노드 목록을 세그먼트 수/문자 수 한도에 맞춰 배치로 분할함.
+   * 블록 목록을 세그먼트 수/문자 수 한도에 맞춰 배치로 분할함.
+   * 문자 수는 각 블록의 innerHTML 길이(태그 포함)를 기준으로 함.
    *
-   * @param {Text[]} nodes - 대상 텍스트 노드 배열.
-   * @returns {Text[][]} 배치(노드 배열)들의 배열.
+   * @param {Element[]} blocks - 대상 블록 요소 배열.
+   * @returns {Element[][]} 배치(블록 배열)들의 배열.
    */
-  function makeBatches(nodes) {
+  function makeBatches(blocks) {
     const batches = [];
     let current = [];
     let chars = 0;
-    for (const n of nodes) {
-      const len = n.nodeValue.trim().length;
+    for (const el of blocks) {
+      const len = el.innerHTML.length;
       if (
         current.length >= maxSegmentsPerBatch ||
         (current.length > 0 && chars + len > maxCharsPerBatch)
@@ -227,7 +278,7 @@
         current = [];
         chars = 0;
       }
-      current.push(n);
+      current.push(el);
       chars += len;
     }
     if (current.length) batches.push(current);
@@ -235,13 +286,45 @@
   }
 
   /**
-   * 단일 배치를 백그라운드로 보내 번역하고, 응답을 텍스트 노드에 반영함.
+   * 모델이 반환한 HTML 을 삽입 전에 정화함. 위험 태그(script/iframe 등)와
+   * 이벤트 핸들러 속성(on*), javascript: URL 을 제거함. 인라인 서식 태그와
+   * href 등 정상 속성은 유지함.
    *
-   * @param {Text[]} nodes - 이 배치에 속한 텍스트 노드 배열.
+   * @param {string} html - 모델이 반환한 HTML 문자열.
+   * @returns {string} 정화된 HTML 문자열.
    */
-  async function translateBatch(nodes) {
-    // 앞뒤 공백을 보존하기 위해 트림된 원문만 전송하고, 치환 시 다시 붙임.
-    const segments = nodes.map((n) => n.nodeValue.trim());
+  function sanitizeHtml(html) {
+    const tpl = document.createElement("template");
+    tpl.innerHTML = html;
+    const frag = tpl.content;
+
+    frag.querySelectorAll(DANGEROUS_TAGS).forEach((n) => n.remove());
+    frag.querySelectorAll("*").forEach((n) => {
+      for (const attr of [...n.attributes]) {
+        const name = attr.name.toLowerCase();
+        const value = attr.value.trim().toLowerCase();
+        if (name.startsWith("on")) {
+          n.removeAttribute(attr.name);
+        } else if (
+          (name === "href" || name === "src" || name === "xlink:href") &&
+          value.startsWith("javascript:")
+        ) {
+          n.removeAttribute(attr.name);
+        }
+      }
+    });
+
+    return tpl.innerHTML;
+  }
+
+  /**
+   * 단일 배치를 백그라운드로 보내 번역하고, 응답을 블록 innerHTML 로 반영함.
+   *
+   * @param {Element[]} blocks - 이 배치에 속한 블록 요소 배열.
+   */
+  async function translateBatch(blocks) {
+    // 각 블록의 innerHTML 을 세그먼트로 전송함(인라인 태그 포함).
+    const segments = blocks.map((el) => el.innerHTML);
     log("content/translateBatch", `sending ${segments.length} segments`, segments);
 
     let resp;
@@ -264,11 +347,11 @@
     }
 
     const { translations } = resp;
-    if (!Array.isArray(translations) || translations.length !== nodes.length) {
+    if (!Array.isArray(translations) || translations.length !== blocks.length) {
       // 개수 불일치는 세션을 멈추지 않고 이 배치만 건너뜀(다음 배치는 정상일 수 있음).
       logError(
         "content/translateBatch",
-        `bad response shape: expected ${nodes.length}, got ${
+        `bad response shape: expected ${blocks.length}, got ${
           Array.isArray(translations) ? translations.length : typeof translations
         }`,
         { segments, translations },
@@ -277,12 +360,13 @@
       return;
     }
 
-    nodes.forEach((n, i) => {
-      const raw = n.nodeValue;
-      const lead = raw.match(/^\s*/)[0];
-      const trail = raw.match(/\s*$/)[0];
-      n.nodeValue = lead + translations[i] + trail;
-      translated.add(n);
+    blocks.forEach((el, i) => {
+      const html = translations[i];
+      // 비어 있거나 문자열이 아닌 응답은 원문 유지(병합/누락 아티팩트 방어).
+      if (typeof html === "string" && html.trim() !== "") {
+        el.innerHTML = sanitizeHtml(html);
+      }
+      translatedBlocks.add(el);
     });
 
     log("content/translateBatch", `applied ${translations.length} translations`);
@@ -301,6 +385,8 @@
     io = new IntersectionObserver(onIntersect, { rootMargin: "200px 0px" });
 
     // 동적 콘텐츠(무한 스크롤 등)로 노드가 추가되면 재스캔.
+    // 번역 결과 innerHTML 교체도 childList 변경을 유발하지만, 해당 블록은 이미
+    // translatedBlocks 에 있어 재수집되지 않으므로 무한 루프가 생기지 않음.
     mo = new MutationObserver(() => scheduleScan());
     mo.observe(document.body, { childList: true, subtree: true });
 
@@ -315,7 +401,7 @@
     if (mo) { mo.disconnect(); mo = null; }
     if (scanTimer) { clearTimeout(scanTimer); scanTimer = null; }
     if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
-    pendingNodes.clear();
+    pendingBlocks.clear();
     // WeakSet 은 clear() 가 없어 참조 교체로 초기화함.
     // 다음 세션에서 io.observe 재등록이 정상 동작하도록 관찰 집합을 비움.
     observedEls = new WeakSet();
