@@ -6,6 +6,7 @@
 
 import { translateSegments as openaiTranslate } from "./providers/openai.js";
 import { translateSegments as openrouterTranslate } from "./providers/openrouter.js";
+import { translateSegments as geminiTranslate } from "./providers/gemini.js";
 
 // 프로바이더 레지스트리. 향후 확장 시 이 객체에 항목을 추가함.
 // 각 프로바이더는 translateSegments({ apiKey, model, segments, tone, glossary })
@@ -13,6 +14,7 @@ import { translateSegments as openrouterTranslate } from "./providers/openrouter
 const PROVIDERS = {
   openai: openaiTranslate,
   openrouter: openrouterTranslate,
+  gemini: geminiTranslate,
 };
 
 const DEFAULT_PROVIDER = "openai";

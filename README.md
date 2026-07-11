@@ -1,21 +1,22 @@
 # AI 페이지 번역기
 
-현재 보고 있는 웹 페이지를 원본 언어와 무관하게 **한국어로 번역**하는 Chrome 확장 프로그램(Manifest V3). LLM 프로바이더로 **OpenAI**와 **OpenRouter**를 지원하며, 추후 다른 프로바이더로 확장할 수 있도록 설계함.
+현재 보고 있는 웹 페이지를 원본 언어와 무관하게 **한국어로 번역**하는 Chrome 확장 프로그램(Manifest V3). LLM 프로바이더로 **OpenAI**, **OpenRouter**, **Gemini**를 지원하며, 추후 다른 프로바이더로 확장할 수 있도록 설계함. Gemini는 Google의 **Interactions API**를 사용함.
 
 ## 주요 기능
 
 - 확장 아이콘(팝업)의 **"이 페이지 번역"** 버튼을 누를 때만 번역을 실행함. 페이지 진입 시 자동 번역하지 않음.
 - 뷰포트에 보이는 텍스트부터 번역하며, **스크롤로 새 영역이 나타나면 이어서 번역**함(`IntersectionObserver`).
 - 무한 스크롤 등으로 DOM이 동적으로 추가되면 자동으로 감지해 번역함(`MutationObserver`).
-- 사용자가 **API 키**와 **모델명**을 직접 입력함(예: OpenAI `gpt-5.4-mini`, OpenRouter `deepseek/deepseek-v4-flash`).
-- **프로바이더별 자격증명 저장**: OpenAI/OpenRouter 각각의 API 키·모델을 따로 저장하며, 프로바이더를 전환하면 해당 프로바이더에 저장한 값이 자동으로 표시됨.
+- 사용자가 **API 키**와 **모델명**을 직접 입력함(예: OpenAI `gpt-5.4-mini`, OpenRouter `deepseek/deepseek-v4-flash`, Gemini `gemini-3.1-flash-lite`).
+- **프로바이더별 자격증명 저장**: OpenAI/OpenRouter/Gemini 각각의 API 키·모델을 따로 저장하며, 프로바이더를 전환하면 해당 프로바이더에 저장한 값이 자동으로 표시됨.
 - **말투 선택**: 페이지 전체를 일관된 **반말(기사체)** 또는 **존댓말(합니다체)** 로 번역함. 배치별로 나뉘어 번역해도 말투가 섞이지 않음.
-- **추론 강도 조정**: 추론(reasoning) 모델이 번역 전에 사고 과정을 길게 도는 것을 줄임. 없음(기본)/최소/낮음/모델 기본값 중 선택. 프로바이더별로 올바른 형식(OpenAI `reasoning_effort`, OpenRouter `reasoning` 객체)만 전송하며, 모델이 특정 값을 거부하면 지원되는 가장 낮은 값으로 자동 폴백함.
+- **추론 강도 조정**: 추론(reasoning) 모델이 번역 전에 사고 과정을 길게 도는 것을 줄임. 없음(기본)/최소/낮음/모델 기본값 중 선택. 프로바이더별로 올바른 형식(OpenAI `reasoning_effort`, OpenRouter `reasoning` 객체, Gemini `generation_config.thinking_level`)만 전송함. Gemini에는 완전 비활성 값이 없어 `없음`을 `minimal`로 매핑하며, 모델이 거부하면 모델 기본값으로 자동 폴백함.
 - **용어집(고정 번역)**: 특정 고유명사·용어를 항상 지정한 번역으로 치환함(예: `Sam Altman=샘 올트먼`). 설정에 저장되어 재사용됨.
 - **자동 재시도**: 일시적 오류(네트워크 오류·429 레이트리밋·5xx 서버 오류·빈 응답)는 지수 백오프로 자동 재시도함(배치당 최대 2회). 인증 오류(401/403) 등 영구 오류와 **요청 타임아웃(60초 무응답)**은 즉시 실패시킴(그 모델이 감당 못 하는 것으로 보고 재시도하지 않음).
 - **배치 크기/문자 수 캡 조정**: 한 요청에 담는 세그먼트 수(1~100, 기본 40)와 문자 수 캡(500~20000, 기본 3000)을 설정에서 조정할 수 있음. 배치는 둘 중 먼저 도달하는 쪽에서 끊김. 느린 모델은 작게 잡으면 배치당 응답이 빨라져 타임아웃 위험이 줄어듦.
 - **요청 타임아웃 조정**: 배치당 응답 대기 시간(10~300초, 기본 60초)을 설정에서 조정할 수 있음. 초과하면 재시도 없이 실패 처리함.
-- **출력 토큰 자동 산정**: 배치 크기에 비례해 `max_completion_tokens`(GPT-5 계열·OpenRouter 공통 현행 파라미터)를 자동 설정함. 추론 토큰까지 포함되는 상한임을 고려해 여유분을 더해 잘림을 방지함.
+- **출력 토큰 자동 산정**: 배치 크기에 비례해 OpenAI/OpenRouter의 `max_completion_tokens` 또는 Gemini의 `generation_config.max_output_tokens`를 자동 설정함. 추론 토큰까지 고려해 여유분을 더해 잘림을 방지함.
+- **Gemini 구조화 출력**: Interactions API의 `response_format`에 배치 키별 JSON Schema를 제공해 번역 응답 형태를 강제함. 페이지 번역 요청은 대화 상태가 필요 없으므로 `store:false`로 실행함.
 - **디버그 로그**: 설정에서 켜면 요청·응답 상세를 콘솔에 출력하여 간헐적 실패의 원인을 추적할 수 있음(아래 [디버깅](#디버깅) 참고).
 
 ## 설치 (개발자 모드)
@@ -53,20 +54,21 @@ ai_translator/
       openai-compatible.js  # OpenAI 호환 공통 로직 (프롬프트 구성 + fetch)
       openai.js             # OpenAI 프로바이더 (엔드포인트 지정 래퍼)
       openrouter.js         # OpenRouter 프로바이더 (엔드포인트 지정 래퍼)
+      gemini.js             # Gemini Interactions API 프로바이더
 ```
 
 ### 동작 흐름
 
 1. 팝업의 번역 버튼 → 활성 탭의 `content.js` 에 `start-translation` 메시지 전송.
 2. `content.js` 가 뷰포트에 들어온 텍스트 노드를 배치로 묶어 `background.js` 에 `translate-batch` 요청.
-3. `background.js` 가 저장된 설정으로 프로바이더(`openai.js`)를 호출해 번역 결과 반환.
+3. `background.js` 가 저장된 설정으로 선택된 프로바이더를 호출해 번역 결과 반환.
 4. `content.js` 가 원문 텍스트 노드를 번역문으로 치환(앞뒤 공백 보존).
 
 > API 호출을 서비스 워커에서 수행하는 이유: 페이지의 CSP 제약을 우회하고, API 키를 페이지 컨텍스트에 노출하지 않기 위함.
 
 ## 프로바이더 확장 방법
 
-OpenAI 호환(Chat Completions) API라면 `openai-compatible.js` 의 `createTranslator`로 엔드포인트만 지정해 손쉽게 추가할 수 있음(예: `openrouter.js`). 호환되지 않는 API는 `translateSegments({ apiKey, model, segments, tone, glossary })` 시그니처를 직접 구현함(입력과 동일한 길이·순서의 한국어 배열 반환).
+OpenAI 호환(Chat Completions) API라면 `openai-compatible.js` 의 `createTranslator`로 엔드포인트만 지정해 손쉽게 추가할 수 있음(예: `openrouter.js`). 호환되지 않는 API는 `translateSegments({ apiKey, model, segments, tone, glossary, reasoningEffort, timeoutMs, debug })` 시그니처를 직접 구현함(입력과 동일한 길이·순서의 한국어 배열 반환). `gemini.js`가 Interactions API를 직접 구현하는 예임.
 
 1. `src/providers/` 에 새 파일을 만들고 `translateSegments` 를 export 함. OpenAI 호환이면 `createTranslator({ endpoint, label, extraHeaders })` 를 재사용함.
 2. `src/background.js` 의 `PROVIDERS` 레지스트리에 항목을 추가함.
@@ -82,7 +84,7 @@ OpenAI 호환(Chat Completions) API라면 `openai-compatible.js` 의 `createTran
 1. 팝업 설정에서 **디버그 로그** 체크박스를 켜고 저장함. 요청/응답 상세가 콘솔에 출력됨.
 2. **서비스 워커 콘솔**(가장 중요): `chrome://extensions` → 확장 카드의 **"서비스 워커"** 클릭 → DevTools.
    - `[ai_translator ...] [background/handleTranslate] ...` 및 프로바이더 로그로 요청·소요시간·라우팅된 모델(`routedModel`/`provider`)·레이트리밋 헤더를 확인함.
-   - **Network** 탭에서 `chat/completions` 요청의 실제 상태 코드·응답 본문을 볼 수 있음.
+   - **Network** 탭에서 `chat/completions` 또는 Gemini `v1beta/interactions` 요청의 실제 상태 코드·응답 본문을 볼 수 있음.
 3. **페이지 콘솔**(F12): `content.js` 가 배치별 전송/적용 및 오류를 로깅함. 오류 토스트는 자동으로 사라지지 않으며 클릭하면 닫힘.
 
 오류 메시지 자체에 진단 정보가 포함됨:

@@ -12,6 +12,7 @@ const DEFAULT_PROVIDER = "openai";
 const PROVIDER_META = {
   openai: { apiKeyHint: "sk-...", modelHint: "예: gpt-5.4-mini" },
   openrouter: { apiKeyHint: "sk-or-...", modelHint: "예: deepseek/deepseek-v4-flash" },
+  gemini: { apiKeyHint: "Google AI Studio API 키", modelHint: "예: gemini-3.1-flash-lite" },
 };
 
 // 저장소 기본값. credentials 는 { [provider]: { apiKey, model } } 구조이며,

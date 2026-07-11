@@ -94,7 +94,7 @@ function parseGlossary(glossary) {
  * @param {string} [params.glossary] - 용어집 원문(줄 단위 매핑 문자열).
  * @returns {string} 번역 요청에 사용할 시스템 프롬프트.
  */
-function buildSystemPrompt({ tone, glossary }) {
+export function buildSystemPrompt({ tone, glossary }) {
   const parts = [BASE_RULES.join(" ")];
 
   parts.push(TONE_INSTRUCTIONS[tone] ?? TONE_INSTRUCTIONS[DEFAULT_TONE]);
@@ -170,7 +170,7 @@ const MAX_TOKENS_CEILING = 16000; // 상한(비용/모델 한계 방어)
  * @param {number} totalChars - 배치 내 모든 세그먼트의 문자 수 합.
  * @returns {number} 산정된 max_completion_tokens 값(정수, FLOOR~CEILING 범위).
  */
-function computeMaxTokens(totalChars) {
+export function computeMaxTokens(totalChars) {
   const estimated = Math.ceil(totalChars * OUTPUT_TOKENS_PER_CHAR) + MAX_TOKENS_BUFFER;
   return Math.min(MAX_TOKENS_CEILING, Math.max(MAX_TOKENS_FLOOR, estimated));
 }
@@ -468,6 +468,97 @@ function extractValidTranslationPrefix(content) {
 }
 
 /**
+ * 모델의 텍스트 출력을 번역 배열로 파싱함.
+ *
+ * 엄격한 JSON 파싱을 우선하고, 실패하면 완전한 선행 객체 또는 연속된 정상 번역
+ * 항목만 제한적으로 복구한다. 누락되거나 빈 항목은 같은 인덱스의 원문으로 대체한다.
+ *
+ * @param {string} content - 모델이 반환한 텍스트 출력.
+ * @param {string[]} segments - 입력 원문 세그먼트 배열.
+ * @param {object} [options] - 진단 옵션.
+ * @param {boolean} [options.debug] - 디버그 로그 활성 여부.
+ * @param {string} [options.where] - 로그 위치 문자열.
+ * @returns {string[]} 입력과 동일한 길이·순서의 번역 배열.
+ * @throws {Error} 사용 가능한 번역 JSON을 찾지 못했을 때.
+ */
+export function parseTranslationResponse(content, segments, { debug = false, where = "translation" } = {}) {
+  const segmentsLen = segments.length;
+  let parsed;
+  try {
+    parsed = JSON.parse(content);
+  } catch {
+    // 일부 모델은 유효한 JSON 객체를 만든 뒤 닫는 중괄호나 설명을 덧붙이기도 함.
+    // 문자열 내부 중괄호를 구분하는 스캐너로 선행 객체만 추출해 한 번 복구함.
+    const candidate = extractLeadingJsonObject(content);
+    let recovered = false;
+    if (candidate) {
+      try {
+        parsed = JSON.parse(candidate);
+        recovered = true;
+        const ignoredChars = content.trimStart().length - candidate.length;
+        logDebug(
+          debug,
+          where,
+          `recovered leading JSON object; ignored ${ignoredChars} trailing characters`,
+        );
+      } catch {
+        // 객체 내부까지 손상된 경우 아래의 항목 단위 폴백을 시도함.
+      }
+    }
+
+    if (!recovered) {
+      const translationPrefix = extractValidTranslationPrefix(content);
+      if (translationPrefix) {
+        parsed = { translations: translationPrefix };
+        recovered = true;
+        logDebug(
+          debug,
+          where,
+          `recovered ${Object.keys(translationPrefix).length}/${segmentsLen} valid translation entries before malformed JSON`,
+        );
+      }
+    }
+
+    if (!recovered) {
+      const snippet = content ? content.slice(0, 200) : "(empty content)";
+      throw makeError(`failed to parse model response as JSON: ${snippet}`, {
+        retryable: !content,
+      });
+    }
+  }
+
+  const map = resolveTranslationMap(parsed);
+  if (!map) {
+    throw makeError(
+      `response has no usable translations (top-level keys: ${Object.keys(parsed || {}).join(", ") || "none"})`,
+      { retryable: false },
+    );
+  }
+
+  let fallbackCount = 0;
+  const result = new Array(segmentsLen);
+  for (let i = 0; i < segmentsLen; i++) {
+    const translation = map[i];
+    if (typeof translation === "string" && translation.trim() !== "") {
+      result[i] = translation;
+    } else {
+      result[i] = segments[i];
+      fallbackCount++;
+    }
+  }
+
+  if (fallbackCount > 0) {
+    logDebug(
+      debug,
+      where,
+      `filled ${fallbackCount}/${segmentsLen} segments with original text (missing/empty translation)`,
+    );
+  }
+
+  return result;
+}
+
+/**
  * 단일 시도로 번역 요청을 수행함(타임아웃 포함). 실패 시 makeError 로 재시도
  * 가능 여부를 표시하여 던짐.
  *
@@ -559,85 +650,7 @@ async function attemptTranslate({ endpoint, headers, bodyStr, label, debug, wher
     finishReason: data?.choices?.[0]?.finish_reason,
   });
 
-  let parsed;
-  try {
-    parsed = JSON.parse(content);
-  } catch {
-    // 일부 모델은 유효한 JSON 객체를 만든 뒤 닫는 중괄호나 설명을 덧붙이기도 함.
-    // 문자열 내부 중괄호를 구분하는 스캐너로 선행 객체만 추출해 한 번 복구함.
-    const candidate = extractLeadingJsonObject(content);
-    let recovered = false;
-    if (candidate) {
-      try {
-        parsed = JSON.parse(candidate);
-        recovered = true;
-        const ignoredChars = content.trimStart().length - candidate.length;
-        logDebug(
-          debug,
-          where,
-          `recovered leading JSON object; ignored ${ignoredChars} trailing characters`,
-        );
-      } catch {
-        // 객체 내부까지 손상된 경우 아래의 항목 단위 폴백을 시도함.
-      }
-    }
-
-    if (!recovered) {
-      const translationPrefix = extractValidTranslationPrefix(content);
-      if (translationPrefix) {
-        parsed = { translations: translationPrefix };
-        recovered = true;
-        logDebug(
-          debug,
-          where,
-          `recovered ${Object.keys(translationPrefix).length}/${segmentsLen} valid translation entries before malformed JSON`,
-        );
-      }
-    }
-
-    if (!recovered) {
-      // 모델이 JSON 을 지키지 않은 경우를 진단할 수 있도록 응답 원문 일부를 오류에 포함함.
-      // 빈 응답은 라우팅 실패/타임아웃 등 일시적 원인일 수 있어 재시도하고,
-      // 비어 있지 않은 평문은 모델이 JSON 형식을 미지원하는 것이므로 재시도하지 않음.
-      const snippet = content ? content.slice(0, 200) : "(empty content)";
-      throw makeError(`failed to parse model response as JSON: ${snippet}`, {
-        retryable: !content,
-      });
-    }
-  }
-
-  const map = resolveTranslationMap(parsed);
-  if (!map) {
-    throw makeError(
-      `response has no usable translations (top-level keys: ${Object.keys(parsed || {}).join(", ") || "none"})`,
-      { retryable: false },
-    );
-  }
-
-  // 인덱스 키 기준으로 원문 순서에 맞춰 재구성함. 배열/객체 응답 모두 map[i] 로 접근 가능.
-  // 누락되었거나 비어 있는(공백뿐인) 값은 병합/누락 아티팩트로 보고 원문을 유지함.
-  let fallbackCount = 0;
-  const result = new Array(segmentsLen);
-  for (let i = 0; i < segmentsLen; i++) {
-    const t = map[i];
-    if (typeof t === "string" && t.trim() !== "") {
-      result[i] = t;
-    } else {
-      result[i] = segments[i];
-      fallbackCount++;
-    }
-  }
-
-  if (fallbackCount > 0) {
-    // 일부가 누락돼도 배치 전체를 버리지 않고, 번역된 부분은 반영함.
-    logDebug(
-      debug,
-      where,
-      `filled ${fallbackCount}/${segmentsLen} segments with original text (missing/empty translation)`,
-    );
-  }
-
-  return result;
+  return parseTranslationResponse(content, segments, { debug, where });
 }
 
 /**

@@ -10,7 +10,11 @@
     "128": "icons/icon128.png"
   },
   "permissions": ["storage", "activeTab"],
-  "host_permissions": ["https://api.openai.com/*", "https://openrouter.ai/*"],
+  "host_permissions": [
+    "https://api.openai.com/*",
+    "https://openrouter.ai/*",
+    "https://generativelanguage.googleapis.com/*"
+  ],
   "background": {
     "service_worker": "src/background.js",
     "type": "module"
