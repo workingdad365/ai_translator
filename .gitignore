@@ -1,0 +1,23 @@
+# Node.js
+node_modules/
+
+# 로컬 환경변수
+.env
+.env.*
+!.env.example
+
+# IDE
+.vscode/
+.idea/
+*.code-workspace
+
+# OS
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# 로그와 임시 파일
+*.log
+*.tmp
+*.swp
+*~

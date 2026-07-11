@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>AI 페이지 번역기</title>
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand-mark" aria-hidden="true">역</div>
+      <div>
+        <p class="product-name">AI 페이지 번역기</p>
+        <h1>한국어 번역</h1>
+      </div>
+    </header>
+
+    <main>
+      <button id="translate-button" class="primary-button" type="button">
+        이 페이지 번역
+      </button>
+      <p id="notice" class="notice" role="status" aria-live="polite"></p>
+
+      <details id="settings" class="settings">
+        <summary>설정 (프로바이더 · API 키 · 모델)</summary>
+
+        <label class="field">
+          <span>프로바이더</span>
+          <select id="provider">
+            <option value="openai">OpenAI</option>
+          </select>
+        </label>
+
+        <label class="field">
+          <span>API 키</span>
+          <input id="api-key" type="password" autocomplete="off" spellcheck="false"
+                 placeholder="sk-...">
+        </label>
+
+        <label class="field">
+          <span>모델</span>
+          <input id="model" type="text" autocomplete="off" spellcheck="false"
+                 placeholder="예: gpt-5.4-mini">
+        </label>
+
+        <button id="save-button" class="secondary-button" type="button">설정 저장</button>
+        <p id="save-notice" class="notice" role="status" aria-live="polite"></p>
+      </details>
+    </main>
+
+    <script src="popup.js"></script>
+  </body>
+</html>
