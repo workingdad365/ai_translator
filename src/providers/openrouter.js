@@ -18,4 +18,8 @@ export const translateSegments = createTranslator({
   // OpenRouter 는 통합 reasoning 객체를 사용함(최상위 reasoning_effort 는 deprecated,
   // 둘을 동시에 보내면 일부 모델에서 400). exclude:true 로 추론 내용은 응답에서 제외함.
   reasoningParam: (effort) => ({ reasoning: { effort, exclude: true } }),
+  // JSON 모드를 사용한 비스트리밍 응답이 손상되면 OpenRouter 공식 플러그인이
+  // 누락된 따옴표·괄호 등 일반적인 문법 오류를 우선 복구하도록 함.
+  extraBody: ({ useResponseFormat }) =>
+    useResponseFormat ? { plugins: [{ id: "response-healing" }] } : {},
 });

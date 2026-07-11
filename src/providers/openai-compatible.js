@@ -328,6 +328,146 @@ function resolveTranslationMap(parsed) {
 }
 
 /**
+ * 응답 맨 앞의 완전한 JSON 객체 문자열을 추출함.
+ *
+ * 엄격한 JSON 파싱이 실패했을 때만 사용하는 제한적 폴백이다. 선행 공백 뒤 첫 문자가
+ * `{`인 경우에만 탐색하며, 문자열 내부의 중괄호와 이스케이프된 따옴표는 구조로
+ * 계산하지 않는다. 객체가 닫히기 전에 응답이 잘렸거나 완성된 객체를 찾지 못하면
+ * `null`을 반환한다.
+ *
+ * @param {string} content - 모델이 반환한 원본 메시지 내용.
+ * @returns {string|null} 첫 번째 완전한 최상위 JSON 객체 문자열 또는 null.
+ */
+function extractLeadingJsonObject(content) {
+  const text = content.trimStart();
+  if (!text.startsWith("{")) return null;
+
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+
+  for (let index = 0; index < text.length; index++) {
+    const char = text[index];
+
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (char === "\\") {
+        escaped = true;
+      } else if (char === '"') {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (char === '"') {
+      inString = true;
+    } else if (char === "{") {
+      depth++;
+    } else if (char === "}") {
+      depth--;
+      if (depth === 0) return text.slice(0, index + 1);
+    }
+  }
+
+  return null;
+}
+
+/**
+ * 지정 위치에서 시작하는 JSON 문자열 토큰 하나를 파싱함.
+ *
+ * 닫는 따옴표를 찾을 때 이스케이프 상태를 추적하고, 찾은 토큰은 `JSON.parse`로 다시
+ * 검증하여 잘못된 이스케이프나 제어 문자가 든 문자열을 허용하지 않는다.
+ *
+ * @param {string} text - JSON 응답 원문.
+ * @param {number} start - 여는 따옴표가 있어야 하는 시작 인덱스.
+ * @returns {{value: string, end: number}|null} 디코딩된 값과 토큰 다음 인덱스 또는 null.
+ */
+function parseJsonStringAt(text, start) {
+  if (text[start] !== '"') return null;
+
+  let escaped = false;
+  for (let index = start + 1; index < text.length; index++) {
+    const char = text[index];
+    if (escaped) {
+      escaped = false;
+    } else if (char === "\\") {
+      escaped = true;
+    } else if (char === '"') {
+      try {
+        return { value: JSON.parse(text.slice(start, index + 1)), end: index + 1 };
+      } catch {
+        return null;
+      }
+    }
+  }
+
+  return null;
+}
+
+/**
+ * JSON 문법에서 허용되는 공백을 건너뛴 다음 인덱스를 반환함.
+ *
+ * @param {string} text - JSON 응답 원문.
+ * @param {number} start - 탐색 시작 인덱스.
+ * @returns {number} 첫 비공백 문자의 인덱스 또는 문자열 길이.
+ */
+function skipJsonWhitespace(text, start) {
+  let index = start;
+  while (index < text.length && /[\t\n\r ]/.test(text[index])) index++;
+  return index;
+}
+
+/**
+ * 손상된 표준 응답에서 앞부분의 연속된 정상 번역 항목만 추출함.
+ *
+ * `{"translations":{"0":"...","1":"..."}}` 형태와 0부터 증가하는 키만
+ * 허용한다. 각 키·값 문자열과 뒤따르는 쉼표를 모두 검증한 뒤에만 결과에 추가하므로,
+ * 모델이 JSON 경계 따옴표를 값 안으로 잘못 이스케이프한 현재 항목은 절대 적용하지
+ * 않는다. 전체 translations 객체가 정상적으로 닫힌 경우에는 다른 폴백이 판단하도록
+ * `null`을 반환한다.
+ *
+ * @param {string} content - 모델이 반환한 원본 메시지 내용.
+ * @returns {Record<string, string>|null} 하나 이상의 정상 선행 항목 또는 null.
+ */
+function extractValidTranslationPrefix(content) {
+  const text = content.trimStart();
+  const wrapper = text.match(/^\{\s*"translations"\s*:\s*\{/);
+  if (!wrapper) return null;
+
+  const translations = {};
+  let expectedKey = 0;
+  let index = wrapper[0].length;
+  const partialResult = () => (expectedKey > 0 ? translations : null);
+
+  while (index < text.length) {
+    index = skipJsonWhitespace(text, index);
+    if (text[index] === "}") return null;
+
+    const key = parseJsonStringAt(text, index);
+    if (!key || key.value !== String(expectedKey)) return partialResult();
+
+    index = skipJsonWhitespace(text, key.end);
+    if (text[index] !== ":") return partialResult();
+
+    index = skipJsonWhitespace(text, index + 1);
+    const value = parseJsonStringAt(text, index);
+    if (!value) return partialResult();
+
+    index = skipJsonWhitespace(text, value.end);
+    const delimiter = text[index];
+    if (delimiter !== "," && delimiter !== "}") return partialResult();
+
+    translations[expectedKey] = value.value;
+    expectedKey++;
+    if (delimiter === "}") return null;
+    index++;
+  }
+
+  return partialResult();
+}
+
+/**
  * 단일 시도로 번역 요청을 수행함(타임아웃 포함). 실패 시 makeError 로 재시도
  * 가능 여부를 표시하여 던짐.
  *
@@ -423,13 +563,47 @@ async function attemptTranslate({ endpoint, headers, bodyStr, label, debug, wher
   try {
     parsed = JSON.parse(content);
   } catch {
-    // 모델이 JSON 을 지키지 않은 경우를 진단할 수 있도록 응답 원문 일부를 오류에 포함함.
-    // 빈 응답은 라우팅 실패/타임아웃 등 일시적 원인일 수 있어 재시도하고,
-    // 비어 있지 않은 평문은 모델이 JSON 형식을 미지원하는 것이므로 재시도하지 않음.
-    const snippet = content ? content.slice(0, 200) : "(empty content)";
-    throw makeError(`failed to parse model response as JSON: ${snippet}`, {
-      retryable: !content,
-    });
+    // 일부 모델은 유효한 JSON 객체를 만든 뒤 닫는 중괄호나 설명을 덧붙이기도 함.
+    // 문자열 내부 중괄호를 구분하는 스캐너로 선행 객체만 추출해 한 번 복구함.
+    const candidate = extractLeadingJsonObject(content);
+    let recovered = false;
+    if (candidate) {
+      try {
+        parsed = JSON.parse(candidate);
+        recovered = true;
+        const ignoredChars = content.trimStart().length - candidate.length;
+        logDebug(
+          debug,
+          where,
+          `recovered leading JSON object; ignored ${ignoredChars} trailing characters`,
+        );
+      } catch {
+        // 객체 내부까지 손상된 경우 아래의 항목 단위 폴백을 시도함.
+      }
+    }
+
+    if (!recovered) {
+      const translationPrefix = extractValidTranslationPrefix(content);
+      if (translationPrefix) {
+        parsed = { translations: translationPrefix };
+        recovered = true;
+        logDebug(
+          debug,
+          where,
+          `recovered ${Object.keys(translationPrefix).length}/${segmentsLen} valid translation entries before malformed JSON`,
+        );
+      }
+    }
+
+    if (!recovered) {
+      // 모델이 JSON 을 지키지 않은 경우를 진단할 수 있도록 응답 원문 일부를 오류에 포함함.
+      // 빈 응답은 라우팅 실패/타임아웃 등 일시적 원인일 수 있어 재시도하고,
+      // 비어 있지 않은 평문은 모델이 JSON 형식을 미지원하는 것이므로 재시도하지 않음.
+      const snippet = content ? content.slice(0, 200) : "(empty content)";
+      throw makeError(`failed to parse model response as JSON: ${snippet}`, {
+        retryable: !content,
+      });
+    }
   }
 
   const map = resolveTranslationMap(parsed);
@@ -480,6 +654,8 @@ async function attemptTranslate({ endpoint, headers, bodyStr, label, debug, wher
  *   요청 본문 필드로 변환하는 함수. 프로바이더마다 형식이 달라 주입식으로 받음
  *   (OpenAI: `{reasoning_effort}`, OpenRouter: `{reasoning:{effort,exclude}}`).
  *   null 이면 추론 제어 파라미터를 보내지 않음.
+ * @param {Record<string, *>|((context: {useResponseFormat: boolean, effort: string|null}) => Record<string, *>)} [config.extraBody]
+ *   프로바이더별 요청 본문 추가 필드 또는 생성 함수. 공통 필드는 덮어쓸 수 없음.
  * @returns {(params: {apiKey: string, model: string, segments: string[], tone?: string, glossary?: string, reasoningEffort?: string, debug?: boolean}) => Promise<string[]>}
  *   입력과 동일한 길이/순서의 한국어 번역 배열을 반환하는 translateSegments 함수.
  */
@@ -489,6 +665,7 @@ export function createTranslator({
   extraHeaders = {},
   tokenParam = "max_completion_tokens",
   reasoningParam = null,
+  extraBody = null,
 }) {
   /**
    * 텍스트 세그먼트 배열을 한국어로 번역함.
@@ -542,7 +719,10 @@ export function createTranslator({
     const buildBody = (useResponseFormat, effort) => {
       const reasoningExtra =
         effort && typeof reasoningParam === "function" ? reasoningParam(effort) : null;
+      const providerExtra =
+        typeof extraBody === "function" ? extraBody({ useResponseFormat, effort }) : extraBody;
       return JSON.stringify({
+        ...(providerExtra || {}),
         model,
         messages: [
           { role: "system", content: buildSystemPrompt({ tone, glossary }) },
