@@ -15,14 +15,20 @@ const PROVIDERS = {
 const DEFAULT_PROVIDER = "openai";
 
 /**
- * 저장소에서 사용자 설정(프로바이더/API 키/모델)을 읽음.
+ * 저장소에서 사용자 설정(프로바이더/API 키/모델/말투/용어집)을 읽음.
  *
- * @returns {Promise<{provider: string, apiKey: string, model: string}>} 저장된 설정값.
+ * @returns {Promise<{provider: string, apiKey: string, model: string, tone: string, glossary: string}>}
+ *   저장된 설정값. tone 은 "banmal"(기본) 또는 "jondaenmal", glossary 는 줄 단위 매핑 원문.
  */
 async function getSettings() {
-  const { provider = DEFAULT_PROVIDER, apiKey = "", model = "" } =
-    await chrome.storage.local.get(["provider", "apiKey", "model"]);
-  return { provider, apiKey, model };
+  const {
+    provider = DEFAULT_PROVIDER,
+    apiKey = "",
+    model = "",
+    tone = "banmal",
+    glossary = "",
+  } = await chrome.storage.local.get(["provider", "apiKey", "model", "tone", "glossary"]);
+  return { provider, apiKey, model, tone, glossary };
 }
 
 /**
@@ -32,7 +38,7 @@ async function getSettings() {
  * @returns {Promise<{translations?: string[], error?: string}>} 번역 결과 또는 오류 메시지.
  */
 async function handleTranslate(segments) {
-  const { provider, apiKey, model } = await getSettings();
+  const { provider, apiKey, model, tone, glossary } = await getSettings();
 
   if (!apiKey) {
     return { error: "API 키가 설정되지 않았습니다. 확장 팝업에서 키를 입력하세요." };
@@ -47,7 +53,7 @@ async function handleTranslate(segments) {
   }
 
   try {
-    const translations = await translate({ apiKey, model, segments });
+    const translations = await translate({ apiKey, model, segments, tone, glossary });
     return { translations };
   } catch (err) {
     // [background.js/handleTranslate] 번역 실패 시 콘텐츠 스크립트로 오류 전달

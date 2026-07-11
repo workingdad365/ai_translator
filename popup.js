@@ -4,12 +4,20 @@
 // - 번역을 시작하면 팝업을 즉시 닫음.
 // - 번역 중인 페이지에서 팝업을 다시 열면 "번역 중지" 버튼이 표시되고, 누르면 세션을 멈춤.
 
-const DEFAULTS = { provider: "openai", apiKey: "", model: "" };
+const DEFAULTS = {
+  provider: "openai",
+  apiKey: "",
+  model: "",
+  tone: "banmal",
+  glossary: "",
+};
 
 const els = {
   provider: document.getElementById("provider"),
   apiKey: document.getElementById("api-key"),
   model: document.getElementById("model"),
+  tone: document.getElementById("tone"),
+  glossary: document.getElementById("glossary"),
   translate: document.getElementById("translate-button"),
   save: document.getElementById("save-button"),
   settings: document.getElementById("settings"),
@@ -59,6 +67,8 @@ async function loadSettings() {
   els.provider.value = cfg.provider;
   els.apiKey.value = cfg.apiKey;
   els.model.value = cfg.model;
+  els.tone.value = cfg.tone;
+  els.glossary.value = cfg.glossary;
 
   // 키/모델이 비어 있으면 설정 영역을 펼쳐 입력을 유도함.
   if (!cfg.apiKey || !cfg.model) {
@@ -89,13 +99,16 @@ async function refreshStatus() {
 /**
  * 현재 폼 값을 저장소에 저장함.
  *
- * @returns {Promise<{provider: string, apiKey: string, model: string}>} 저장된 설정값.
+ * @returns {Promise<{provider: string, apiKey: string, model: string, tone: string, glossary: string}>}
+ *   저장된 설정값.
  */
 async function saveSettings() {
   const cfg = {
     provider: els.provider.value,
     apiKey: els.apiKey.value.trim(),
     model: els.model.value.trim(),
+    tone: els.tone.value,
+    glossary: els.glossary.value.trim(),
   };
   await chrome.storage.local.set(cfg);
   return cfg;

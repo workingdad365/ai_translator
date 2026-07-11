@@ -43,6 +43,20 @@
                  placeholder="예: gpt-5.4-mini">
         </label>
 
+        <label class="field">
+          <span>말투</span>
+          <select id="tone">
+            <option value="banmal">반말 (기사체 · 일관 평서형)</option>
+            <option value="jondaenmal">존댓말 (합니다체)</option>
+          </select>
+        </label>
+
+        <label class="field">
+          <span>용어집 (한 줄에 하나: <code>원문=번역</code>)</span>
+          <textarea id="glossary" rows="4" autocomplete="off" spellcheck="false"
+                    placeholder="Sam Altman=샘 올트먼&#10;Elon Musk=일론 머스크"></textarea>
+        </label>
+
         <button id="save-button" class="secondary-button" type="button">설정 저장</button>
         <p id="save-notice" class="notice" role="status" aria-live="polite"></p>
       </details>
