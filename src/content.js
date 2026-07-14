@@ -25,25 +25,15 @@
   const PROTECTED_ATTR = "data-ai-translator-protected";
   let protectedBlockSequence = 0;
 
-  // 인라인 요소 태그. 텍스트 노드의 "블록 조상"을 찾을 때 이 태그들은 건너뜀.
-  // 즉, 문장 중간의 <a>/<em>/<strong> 등으로 쪼개진 텍스트 노드들이 같은 블록
-  // 조상(예: <p>)으로 수렴하도록 하여, 한 문장을 하나의 번역 단위로 묶음.
-  const INLINE_TAGS = new Set([
-    "A", "ABBR", "B", "BDI", "BDO", "CITE", "CODE", "DATA", "DFN", "EM",
-    "I", "KBD", "MARK", "Q", "RP", "RT", "RUBY", "S", "SAMP", "SMALL",
-    "SPAN", "STRONG", "SUB", "SUP", "TIME", "U", "VAR", "WBR", "FONT",
-    "LABEL", "OUTPUT", "INS", "DEL", "BR", "IMG",
-  ]);
-
   /**
-   * 태그 의미와 실제 CSS 배치를 함께 보고 인라인 요소인지 판별함.
-   * span 등 인라인 태그도 display:block/flex/grid이면 독립 번역 블록으로 취급함.
+   * 실제 CSS 배치를 보고 인라인 요소인지 판별함.
+   * Reddit 등의 커스텀 요소도 display:inline이면 문장 일부로 취급하고,
+   * span 등 기본 인라인 태그도 display:block/flex/grid이면 독립 블록으로 취급함.
    *
    * @param {Element} el - 검사할 요소.
    * @returns {boolean} 문장 안에서 부모 블록과 함께 번역할 인라인 요소이면 true.
    */
   function isInlineElement(el) {
-    if (!INLINE_TAGS.has(el.tagName)) return false;
     const display = getComputedStyle(el).display;
     return (
       display === "none" ||
