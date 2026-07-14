@@ -22,11 +22,29 @@
   // 즉, 문장 중간의 <a>/<em>/<strong> 등으로 쪼개진 텍스트 노드들이 같은 블록
   // 조상(예: <p>)으로 수렴하도록 하여, 한 문장을 하나의 번역 단위로 묶음.
   const INLINE_TAGS = new Set([
-    "A", "ABBR", "B", "BDI", "BDO", "CITE", "DATA", "DFN", "EM", "I",
-    "MARK", "Q", "RP", "RT", "RUBY", "S", "SMALL", "SPAN", "STRONG",
-    "SUB", "SUP", "TIME", "U", "VAR", "WBR", "FONT", "LABEL", "OUTPUT",
-    "INS", "DEL", "BR", "IMG",
+    "A", "ABBR", "B", "BDI", "BDO", "CITE", "CODE", "DATA", "DFN", "EM",
+    "I", "KBD", "MARK", "Q", "RP", "RT", "RUBY", "S", "SAMP", "SMALL",
+    "SPAN", "STRONG", "SUB", "SUP", "TIME", "U", "VAR", "WBR", "FONT",
+    "LABEL", "OUTPUT", "INS", "DEL", "BR", "IMG",
   ]);
+
+  /**
+   * 태그 의미와 실제 CSS 배치를 함께 보고 인라인 요소인지 판별함.
+   * span 등 인라인 태그도 display:block/flex/grid이면 독립 번역 블록으로 취급함.
+   *
+   * @param {Element} el - 검사할 요소.
+   * @returns {boolean} 문장 안에서 부모 블록과 함께 번역할 인라인 요소이면 true.
+   */
+  function isInlineElement(el) {
+    if (!INLINE_TAGS.has(el.tagName)) return false;
+    const display = getComputedStyle(el).display;
+    return (
+      display === "none" ||
+      display === "contents" ||
+      display.startsWith("inline") ||
+      display.startsWith("ruby")
+    );
+  }
 
   // 모델 응답 HTML 을 삽입하기 전에 제거할 위험 태그. 프롬프트가 새 태그 추가를
   // 금지하지만, 방어적으로 스크립트성/외부 로드성 요소를 걷어냄(XSS 방지).
@@ -130,7 +148,7 @@
   function blockContainer(node) {
     let el = node.parentElement;
     if (!el) return null;
-    while (el.parentElement && el !== document.body && INLINE_TAGS.has(el.tagName)) {
+    while (el.parentElement && el !== document.body && isInlineElement(el)) {
       el = el.parentElement;
     }
     return el;
@@ -146,7 +164,7 @@
    */
   function isLeafBlock(el) {
     for (const child of el.children) {
-      if (!INLINE_TAGS.has(child.tagName)) return false;
+      if (!isInlineElement(child)) return false;
     }
     return true;
   }
