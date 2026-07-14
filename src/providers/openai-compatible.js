@@ -47,6 +47,10 @@ const TONE_INSTRUCTIONS = {
     "NEVER use colloquial/conversational endings or particles such as ~야, ~해, ~거야, ~네, ~지, ~잖아, " +
     "and NEVER use slang or a chatty, talking-to-a-friend tone. " +
     "Never use polite/formal-speech endings (존댓말) such as ~습니다, ~합니다, ~에요, ~예요, ~이에요, ~세요. " +
+    "First-person pronouns MUST match this non-honorific style: translate I/me/my as 나/나를/내 and " +
+    "we/us/our as 우리/우리를/우리의, or omit the pronoun when natural. NEVER use the humble or polite " +
+    "forms 저, 저는, 제가, 저를, 제, 저희, 저희는, 저희가, 저희의. For example, `I bought it` MUST be " +
+    "`나는 그것을 구매했다` or naturally `그것을 구매했다`, NEVER `저는 그것을 구매하였다`. " +
     "For the English second person ('you', 'your', 'yourself'), do NOT use 너/네/니; render it as '당신'/'당신의', " +
     "or omit the subject/possessive entirely when that reads more naturally, as Korean news writing commonly does. " +
     "Keep the tone objective and consistent across every segment.",

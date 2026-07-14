@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { createTranslator } from "../src/providers/openai-compatible.js";
+import { buildSystemPrompt, createTranslator } from "../src/providers/openai-compatible.js";
 import { translateSegments as openrouterTranslate } from "../src/providers/openrouter.js";
 
 /**
@@ -43,6 +43,14 @@ async function translateWithContent(content, segments = ["Home"]) {
     globalThis.fetch = originalFetch;
   }
 }
+
+test("반말 프롬프트는 겸양 1인칭을 금지하고 나 계열을 사용한다", () => {
+  const prompt = buildSystemPrompt({ tone: "banmal", glossary: "" });
+
+  assert.match(prompt, /I\/me\/my as 나\/나를\/내/);
+  assert.match(prompt, /NEVER use the humble or polite forms 저, 저는, 제가/);
+  assert.match(prompt, /NEVER `저는 그것을 구매하였다`/);
+});
 
 test("완전한 JSON 객체 뒤의 불필요한 닫는 중괄호를 무시한다", async () => {
   const translatedHtml = '<span title="{menu}">홈</span>';
