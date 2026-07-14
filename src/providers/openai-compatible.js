@@ -17,6 +17,9 @@ const BASE_RULES = [
     "It may be plain text, or it may contain inline tags such as <a>, <em>, <strong>, <span>, <code>, <sup>, <br>.",
   "Translate the human-readable text into natural, fluent Korean, treating the WHOLE fragment as one continuous sentence/paragraph. " +
     "Do NOT translate each tag's text in isolation — read across the tags so the result reads naturally.",
+  "Translate EVERY human-readable sentence, heading, title, question, caption, label, and UI phrase regardless of " +
+    "its length or word count. Do not leave text unchanged merely because it is short, fragmentary, a heading, " +
+    "a question, or lacks terminal punctuation. Only preserve code, URLs, numbers, and genuinely untranslatable proper nouns.",
   "Preserve every HTML tag and ALL of its attributes (href, class, id, data-*, etc.) EXACTLY as given. " +
     "Never translate, rename, reorder, or drop attributes or their values (especially URLs).",
   "Korean word order differs from English, so you MUST move each inline tag to wrap the Korean words that correspond to the " +
@@ -486,7 +489,8 @@ function extractValidTranslationPrefix(content) {
  * @param {object} [options] - 진단 옵션.
  * @param {boolean} [options.debug] - 디버그 로그 활성 여부.
  * @param {string} [options.where] - 로그 위치 문자열.
- * @returns {string[]} 입력과 동일한 길이·순서의 번역 배열.
+ * @returns {string[]} 입력과 동일한 길이·순서의 번역 배열. 누락·빈 응답 인덱스는
+ *   비열거 `missingIndices` 속성에 담김.
  * @throws {Error} 사용 가능한 번역 JSON을 찾지 못했을 때.
  */
 export function parseTranslationResponse(content, segments, { debug = false, where = "translation" } = {}) {
@@ -543,7 +547,7 @@ export function parseTranslationResponse(content, segments, { debug = false, whe
     );
   }
 
-  let fallbackCount = 0;
+  const missingIndices = [];
   const result = new Array(segmentsLen);
   for (let i = 0; i < segmentsLen; i++) {
     const translation = map[i];
@@ -551,15 +555,20 @@ export function parseTranslationResponse(content, segments, { debug = false, whe
       result[i] = translation;
     } else {
       result[i] = segments[i];
-      fallbackCount++;
+      missingIndices.push(i);
     }
   }
 
-  if (fallbackCount > 0) {
+  Object.defineProperty(result, "missingIndices", {
+    value: missingIndices,
+    enumerable: false,
+  });
+
+  if (missingIndices.length > 0) {
     logDebug(
       debug,
       where,
-      `filled ${fallbackCount}/${segmentsLen} segments with original text (missing/empty translation)`,
+      `filled ${missingIndices.length}/${segmentsLen} segments with original text (missing/empty translation)`,
     );
   }
 

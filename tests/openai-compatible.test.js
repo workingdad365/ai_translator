@@ -52,6 +52,13 @@ test("반말 프롬프트는 겸양 1인칭을 금지하고 나 계열을 사용
   assert.match(prompt, /NEVER `저는 그것을 구매하였다`/);
 });
 
+test("프롬프트는 단어 수와 무관하게 제목과 질문을 번역하도록 지시한다", () => {
+  const prompt = buildSystemPrompt({ tone: "banmal", glossary: "" });
+
+  assert.match(prompt, /heading, title, question, caption, label, and UI phrase/);
+  assert.match(prompt, /regardless of its length or word count/);
+});
+
 test("완전한 JSON 객체 뒤의 불필요한 닫는 중괄호를 무시한다", async () => {
   const translatedHtml = '<span title="{menu}">홈</span>';
   const validJson = JSON.stringify({ translations: { 0: translatedHtml } });
@@ -78,6 +85,7 @@ test("객체 내부가 손상되면 앞의 정상 번역만 적용한다", async
   const result = await translateWithContent(malformedJson, segments);
 
   assert.deepEqual(result, ["홈", "모델", "Activity", "Providers"]);
+  assert.deepEqual(result.missingIndices, [2, 3]);
 });
 
 test("OpenRouter JSON 요청에 응답 치유 플러그인을 포함한다", async () => {

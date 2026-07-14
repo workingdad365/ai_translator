@@ -398,10 +398,11 @@
   /**
    * 단일 배치를 백그라운드로 보내 번역하고, 응답을 블록 innerHTML 로 반영함.
    *
-  * @param {Array<{el: Element, html: string, protectedNodes: Element[], protectedId: string}>} blocks
-  *   이 배치에 속한 준비된 번역 블록 배열.
+   * @param {Array<{el: Element, html: string, protectedNodes: Element[], protectedId: string}>} blocks
+   *   이 배치에 속한 준비된 번역 블록 배열.
+  * @param {boolean} [retryMissing] - 누락·빈 응답 블록을 한 번 재요청할지 여부.
    */
-  async function translateBatch(blocks) {
+  async function translateBatch(blocks, retryMissing = true) {
     // 제외 태그 하위 트리가 플레이스홀더로 축약된 HTML을 전송함.
     const segments = blocks.map((block) => block.html);
     log("content/translateBatch", `sending ${segments.length} segments`, segments);
@@ -448,8 +449,14 @@
       return;
     }
 
+    const missingIndexSet = new Set(resp.missingIndices || []);
+    const missingBlocks = [];
     blocks.forEach((block, i) => {
       const html = translations[i];
+      if (retryMissing && missingIndexSet.has(i)) {
+        missingBlocks.push(block);
+        return;
+      }
       // 비어 있거나 문자열이 아닌 응답은 원문 유지(병합/누락 아티팩트 방어).
       if (typeof html === "string" && html.trim() !== "") {
         const restored = restoreProtectedHtml(html, block.protectedNodes, block.protectedId);
@@ -466,6 +473,13 @@
     });
 
     log("content/translateBatch", `applied ${translations.length} translations`);
+    if (missingBlocks.length > 0 && active) {
+      log(
+        "content/translateBatch",
+        `retrying ${missingBlocks.length} missing translation segments once`,
+      );
+      await translateBatch(missingBlocks, false);
+    }
     showToast("번역 중…", "info");
   }
 
