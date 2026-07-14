@@ -1,9 +1,9 @@
 // 콘텐츠 스크립트
 // 팝업의 "번역 시작" 신호를 받아 현재 페이지의 텍스트를 한국어로 치환함.
 // - 번역 단위는 "leaf 블록 요소"(p, li, h1~h6 등 블록 자식이 없는 블록)이며,
-//   해당 요소의 innerHTML 을 통째로 번역함. 문장 중간에 <a>/<em> 같은 인라인
-//   태그가 섞여 문장이 여러 텍스트 노드로 쪼개져도, 블록 단위로 묶어 하나의
-//   문맥으로 번역하므로 어순이 깨지지 않음.
+//   해당 요소의 innerHTML 을 번역함. SVG/수식/코드 블록 같은 제외 하위 트리는
+//   플레이스홀더로 축약했다가 응답 적용 시 원본 DOM 으로 복원함. 문장 중간에
+//   <a>/<em> 같은 인라인 태그가 섞여도 블록 단위 문맥으로 번역함.
 // - 뷰포트에 들어오는 블록만 순차적으로 번역함(IntersectionObserver).
 // - 스크롤로 새 영역이 나타나거나 DOM 이 동적으로 추가되면 자동으로 이어서 번역함.
 // 동일 페이지에 스크립트가 중복 주입되어도 한 번만 초기화되도록 IIFE + 전역 플래그로 보호함.
@@ -17,6 +17,13 @@
     "SCRIPT", "STYLE", "NOSCRIPT", "TEXTAREA", "CODE", "PRE",
     "KBD", "SAMP", "SVG", "MATH", "INPUT", "SELECT", "OPTION",
   ]);
+  const PROTECTED_TAGS = new Set([
+    "SCRIPT", "STYLE", "NOSCRIPT", "TEXTAREA", "PRE", "SVG", "MATH",
+    "INPUT", "SELECT", "OPTION",
+  ]);
+  const PROTECTED_SELECTOR = [...PROTECTED_TAGS].map((tag) => tag.toLowerCase()).join(",");
+  const PROTECTED_ATTR = "data-ai-translator-protected";
+  let protectedBlockSequence = 0;
 
   // 인라인 요소 태그. 텍스트 노드의 "블록 조상"을 찾을 때 이 태그들은 건너뜀.
   // 즉, 문장 중간의 <a>/<em>/<strong> 등으로 쪼개진 텍스트 노드들이 같은 블록
@@ -263,8 +270,9 @@
     try {
       const blocks = [...pendingBlocks];
       pendingBlocks.clear();
+      const preparedBlocks = blocks.map(prepareBlock).filter(Boolean);
 
-      for (const batch of makeBatches(blocks)) {
+      for (const batch of makeBatches(preparedBlocks)) {
         if (!active) break;
         await translateBatch(batch);
       }
@@ -279,15 +287,17 @@
    * 블록 목록을 세그먼트 수/문자 수 한도에 맞춰 배치로 분할함.
    * 문자 수는 각 블록의 innerHTML 길이(태그 포함)를 기준으로 함.
    *
-   * @param {Element[]} blocks - 대상 블록 요소 배열.
-   * @returns {Element[][]} 배치(블록 배열)들의 배열.
+  * @param {Array<{el: Element, html: string, protectedNodes: Element[], protectedId: string}>} blocks
+  *   준비된 번역 블록 배열.
+  * @returns {Array<Array<{el: Element, html: string, protectedNodes: Element[], protectedId: string}>>}
+  *   배치들의 배열.
    */
   function makeBatches(blocks) {
     const batches = [];
     let current = [];
     let chars = 0;
-    for (const el of blocks) {
-      const len = el.innerHTML.length;
+    for (const block of blocks) {
+      const len = block.html.length;
       if (
         current.length >= maxSegmentsPerBatch ||
         (current.length > 0 && chars + len > maxCharsPerBatch)
@@ -296,11 +306,42 @@
         current = [];
         chars = 0;
       }
-      current.push(el);
+      current.push(block);
       chars += len;
     }
     if (current.length) batches.push(current);
     return batches;
+  }
+
+  /**
+   * 제외 태그 하위 트리를 빈 플레이스홀더로 치환한 번역용 HTML을 생성함.
+   * 원본 노드는 응답 적용 시 그대로 이동해 이벤트 리스너와 입력 상태를 보존함.
+   *
+   * @param {Element} el - 번역할 블록 요소.
+  * @returns {{el: Element, html: string, protectedNodes: Element[], protectedId: string}|null}
+   *   번역 요청 정보. 번역할 일반 텍스트가 없으면 null.
+   */
+  function prepareBlock(el) {
+    const clone = el.cloneNode(true);
+    const protectedNodes = [...el.querySelectorAll(PROTECTED_SELECTOR)].filter(
+      (node) => !node.parentElement?.closest(PROTECTED_SELECTOR),
+    );
+    const clonedProtectedNodes = [...clone.querySelectorAll(PROTECTED_SELECTOR)].filter(
+      (node) => !node.parentElement?.closest(PROTECTED_SELECTOR),
+    );
+    const protectedId = `${Date.now().toString(36)}-${++protectedBlockSequence}`;
+
+    clonedProtectedNodes.forEach((node, index) => {
+      const placeholder = document.createElement("span");
+      placeholder.setAttribute(PROTECTED_ATTR, `${protectedId}-${index}`);
+      node.replaceWith(placeholder);
+    });
+
+    if (!/\p{L}/u.test(clone.textContent || "")) {
+      translatedBlocks.add(el);
+      return null;
+    }
+    return { el, html: clone.innerHTML, protectedNodes, protectedId };
   }
 
   /**
@@ -336,13 +377,44 @@
   }
 
   /**
+   * 정화된 번역 HTML의 플레이스홀더를 요청 전 보관한 원본 DOM 노드로 복원함.
+   * 플레이스홀더가 누락·중복·변조되면 원본 손상을 막기 위해 적용하지 않음.
+   *
+   * @param {string} html - 모델이 반환한 번역 HTML.
+   * @param {Element[]} protectedNodes - 요청에서 플레이스홀더로 치환한 원본 노드.
+   * @param {string} protectedId - 이 블록의 플레이스홀더 식별자.
+   * @returns {DocumentFragment|null} 적용할 문서 조각 또는 검증 실패 시 null.
+   */
+  function restoreProtectedHtml(html, protectedNodes, protectedId) {
+    const tpl = document.createElement("template");
+    tpl.innerHTML = sanitizeHtml(html);
+    const prefix = `${protectedId}-`;
+    const placeholders = [...tpl.content.querySelectorAll(`[${PROTECTED_ATTR}]`)].filter(
+      (node) => node.getAttribute(PROTECTED_ATTR).startsWith(prefix),
+    );
+
+    if (placeholders.length !== protectedNodes.length) return null;
+    const seen = new Set();
+    for (const placeholder of placeholders) {
+      const index = Number(placeholder.getAttribute(PROTECTED_ATTR).slice(prefix.length));
+      if (!Number.isInteger(index) || index < 0 || index >= protectedNodes.length || seen.has(index)) {
+        return null;
+      }
+      seen.add(index);
+      placeholder.replaceWith(protectedNodes[index]);
+    }
+    return tpl.content;
+  }
+
+  /**
    * 단일 배치를 백그라운드로 보내 번역하고, 응답을 블록 innerHTML 로 반영함.
    *
-   * @param {Element[]} blocks - 이 배치에 속한 블록 요소 배열.
+  * @param {Array<{el: Element, html: string, protectedNodes: Element[], protectedId: string}>} blocks
+  *   이 배치에 속한 준비된 번역 블록 배열.
    */
   async function translateBatch(blocks) {
-    // 각 블록의 innerHTML 을 세그먼트로 전송함(인라인 태그 포함).
-    const segments = blocks.map((el) => el.innerHTML);
+    // 제외 태그 하위 트리가 플레이스홀더로 축약된 HTML을 전송함.
+    const segments = blocks.map((block) => block.html);
     log("content/translateBatch", `sending ${segments.length} segments`, segments);
 
     let resp;
@@ -378,13 +450,21 @@
       return;
     }
 
-    blocks.forEach((el, i) => {
+    blocks.forEach((block, i) => {
       const html = translations[i];
       // 비어 있거나 문자열이 아닌 응답은 원문 유지(병합/누락 아티팩트 방어).
       if (typeof html === "string" && html.trim() !== "") {
-        el.innerHTML = sanitizeHtml(html);
+        const restored = restoreProtectedHtml(html, block.protectedNodes, block.protectedId);
+        if (restored) {
+          block.el.replaceChildren(restored);
+        } else {
+          logError("content/translateBatch", "protected placeholders were altered; keeping original", {
+            segment: block.html,
+            translation: html,
+          });
+        }
       }
-      translatedBlocks.add(el);
+      translatedBlocks.add(block.el);
     });
 
     log("content/translateBatch", `applied ${translations.length} translations`);

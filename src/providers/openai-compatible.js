@@ -23,6 +23,8 @@ const BASE_RULES = [
     "SAME content it originally wrapped. Example: `Meta has <a href=\"x\">deactivated</a> the tool` -> " +
     "`메타는 그 도구를 <a href=\"x\">비활성화</a>했다`. Keep the tag balanced (matching open/close) and around the translated equivalent.",
   "Do NOT translate or alter the text inside <code> elements, and leave numbers, URLs, and untranslatable proper nouns unchanged.",
+  "An empty <span data-ai-translator-protected=\"TOKEN\"></span> is an opaque placeholder for protected page content. " +
+    "Preserve each such element and its attribute value EXACTLY, keep it empty, and never duplicate or remove it.",
   "Do NOT add any tags, wrappers, code fences, or attributes that were not in the input.",
   'The input is a JSON object of the form {"segments": {"0": "...", "1": "...", ...}} whose keys are string indices.',
   'Return ONLY a JSON object of the form {"translations": {"0": "...", "1": "...", ...}}.',
