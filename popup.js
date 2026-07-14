@@ -18,7 +18,7 @@ const PROVIDER_META = {
 // 저장소 기본값. credentials 는 { [provider]: { apiKey, model } } 구조이며,
 // apiKey/model 최상위 키는 과거 단일 형식과의 하위 호환을 위해서만 읽음.
 const DEFAULT_BATCH_SIZE = 40;
-const DEFAULT_MAX_CHARS = 3000;
+const DEFAULT_MAX_CHARS = 12000;
 const DEFAULT_TIMEOUT_SEC = 60;
 
 const STORAGE_DEFAULTS = {
