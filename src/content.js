@@ -36,7 +36,6 @@
   function isInlineElement(el) {
     const display = getComputedStyle(el).display;
     return (
-      display === "none" ||
       display === "contents" ||
       display.startsWith("inline") ||
       display.startsWith("ruby")
