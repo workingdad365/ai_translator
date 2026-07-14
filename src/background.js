@@ -74,7 +74,7 @@ async function getSettings() {
  * 세그먼트 배열을 번역함. 설정 검증 후 해당 프로바이더로 위임함.
  *
  * @param {string[]} segments - 번역할 원문 배열.
- * @returns {Promise<{translations?: string[], error?: string}>} 번역 결과 또는 오류 메시지.
+ * @returns {Promise<{translations?: string[], error?: string, errorCode?: string|null, requestStats?: {segmentCount: number, charCount: number, timeoutMs: number}}>} 번역 결과 또는 오류 정보.
  */
 async function handleTranslate(segments) {
   const { provider, apiKey, model, tone, glossary, reasoningEffort, timeoutMs, debug } =
@@ -126,7 +126,15 @@ async function handleTranslate(segments) {
         `translate failed (provider=${provider}, model=${model}, ${Date.now() - startedAt}ms):`,
       err,
     );
-    return { error: err.message };
+    return {
+      error: err.message,
+      errorCode: err.code || null,
+      requestStats: {
+        segmentCount: segments.length,
+        charCount: segments.reduce((total, segment) => total + segment.length, 0),
+        timeoutMs,
+      },
+    };
   }
 }
 

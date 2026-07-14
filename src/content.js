@@ -419,7 +419,16 @@
     if (!resp || resp.error) {
       const reason = resp?.error ?? "알 수 없는 오류(서비스 워커 무응답)";
       logError("content/translateBatch", `provider error: ${reason}`, { segments });
-      showToast(`번역 오류: ${reason}`, "error");
+      if (resp?.errorCode === "timeout" && resp.requestStats) {
+        const { segmentCount, charCount, timeoutMs } = resp.requestStats;
+        showToast(
+          `요청 시간 초과: ${segmentCount.toLocaleString()}개 블록, ` +
+            `${charCount.toLocaleString()}자 전송, 제한 ${Math.round(timeoutMs / 1000)}초`,
+          "error",
+        );
+      } else {
+        showToast(`번역 오류: ${reason}`, "error");
+      }
       // 오류가 발생하면 세션을 멈춰 반복 실패/과금을 방지함.
       stopTranslation();
       return;

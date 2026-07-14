@@ -38,12 +38,14 @@ function logDebug(debug, message, data) {
  * @param {object} [options] - 오류 옵션.
  * @param {boolean} [options.retryable] - 일반 재시도 가능 여부.
  * @param {number|null} [options.retryAfterMs] - 서버가 지정한 대기 시간(ms).
+ * @param {string|null} [options.code] - 호출자가 분기할 수 있는 오류 코드.
  * @returns {Error} 부가 속성이 설정된 오류.
  */
-function makeError(message, { retryable = false, retryAfterMs = null } = {}) {
+function makeError(message, { retryable = false, retryAfterMs = null, code = null } = {}) {
   const error = new Error(message);
   error.retryable = retryable;
   error.retryAfterMs = retryAfterMs;
+  error.code = code;
   return error;
 }
 
@@ -220,7 +222,7 @@ async function attemptTranslate({
       ? `request timed out after ${timeoutMs}ms`
       : `network error: ${error.message}`;
     logDebug(debug, `${message} (elapsed ${Date.now() - startedAt}ms)`);
-    throw makeError(message, { retryable: !timedOut });
+    throw makeError(message, { retryable: !timedOut, code: timedOut ? "timeout" : null });
   } finally {
     clearTimeout(timer);
   }

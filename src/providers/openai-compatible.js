@@ -262,12 +262,14 @@ function pickFallbackEffort(supported, rejected) {
  * @param {object} [opts] - 옵션.
  * @param {boolean} [opts.retryable] - 일시적 오류로 재시도 가능하면 true.
  * @param {number|null} [opts.retryAfterMs] - 서버가 지정한 재시도 대기(ms), 없으면 null.
- * @returns {Error} retryable/retryAfterMs 속성이 부착된 Error.
+ * @param {string|null} [opts.code] - 호출자가 분기할 수 있는 오류 코드.
+ * @returns {Error} 부가 속성이 설정된 Error.
  */
-function makeError(message, { retryable = false, retryAfterMs = null } = {}) {
+function makeError(message, { retryable = false, retryAfterMs = null, code = null } = {}) {
   const err = new Error(message);
   err.retryable = retryable;
   err.retryAfterMs = retryAfterMs;
+  err.code = code;
   return err;
 }
 
@@ -599,7 +601,7 @@ async function attemptTranslate({ endpoint, headers, bodyStr, label, debug, wher
       ? `request timed out after ${timeoutMs}ms`
       : `network error: ${err.message}`;
     logDebug(debug, where, `${message} (elapsed ${Date.now() - startedAt}ms)`);
-    throw makeError(message, { retryable: !timedOut });
+    throw makeError(message, { retryable: !timedOut, code: timedOut ? "timeout" : null });
   } finally {
     clearTimeout(timer);
   }
