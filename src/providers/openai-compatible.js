@@ -65,6 +65,11 @@ const TONE_INSTRUCTIONS = {
 };
 
 const DEFAULT_TONE = "banmal";
+const DEFAULT_GLOSSARY = [
+  "Sam Altman=샘 올트먼",
+  "Elon Musk=일론 머스크",
+  "Gemini=제미나이",
+].join("\n");
 
 /**
  * 용어집 원문(줄 단위 매핑 문자열)을 [원어, 번역어] 쌍 배열로 파싱함.
@@ -108,7 +113,8 @@ export function buildSystemPrompt({ tone, glossary }) {
 
   parts.push(TONE_INSTRUCTIONS[tone] ?? TONE_INSTRUCTIONS[DEFAULT_TONE]);
 
-  const pairs = parseGlossary(glossary);
+  const effectiveGlossary = glossary?.trim() || DEFAULT_GLOSSARY;
+  const pairs = parseGlossary(effectiveGlossary);
   if (pairs.length > 0) {
     const lines = [
       "Apply the following fixed terminology mapping. " +

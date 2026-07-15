@@ -17,15 +17,20 @@ const PROVIDER_META = {
 
 // 저장소 기본값. credentials 는 { [provider]: { apiKey, model } } 구조이며,
 // apiKey/model 최상위 키는 과거 단일 형식과의 하위 호환을 위해서만 읽음.
-const DEFAULT_BATCH_SIZE = 40;
-const DEFAULT_MAX_CHARS = 12000;
+const DEFAULT_BATCH_SIZE = 30;
+const DEFAULT_MAX_CHARS = 8000;
 const DEFAULT_TIMEOUT_SEC = 60;
+const DEFAULT_GLOSSARY = [
+  "Sam Altman=샘 올트먼",
+  "Elon Musk=일론 머스크",
+  "Gemini=제미나이",
+].join("\n");
 
 const STORAGE_DEFAULTS = {
   provider: DEFAULT_PROVIDER,
   credentials: {},
   tone: "banmal",
-  glossary: "",
+  glossary: DEFAULT_GLOSSARY,
   reasoningEffort: "none",
   batchSize: DEFAULT_BATCH_SIZE,
   maxChars: DEFAULT_MAX_CHARS,
@@ -178,7 +183,7 @@ async function loadSettings() {
   els.provider.value = cfg.provider;
   els.tone.value = cfg.tone;
   els.reasoningEffort.value = cfg.reasoningEffort;
-  els.glossary.value = cfg.glossary;
+  els.glossary.value = cfg.glossary?.trim() || DEFAULT_GLOSSARY;
   els.batchSize.value = normalizeBatchSize(cfg.batchSize);
   els.maxChars.value = normalizeMaxChars(cfg.maxChars);
   els.timeoutSec.value = normalizeTimeoutSec(cfg.timeoutSec);
@@ -231,13 +236,15 @@ async function saveSettings() {
   els.batchSize.value = batchSize;
   els.maxChars.value = maxChars;
   els.timeoutSec.value = timeoutSec;
+  const glossary = els.glossary.value.trim() || DEFAULT_GLOSSARY;
+  els.glossary.value = glossary;
 
   await chrome.storage.local.set({
     provider,
     credentials,
     tone: els.tone.value,
     reasoningEffort: els.reasoningEffort.value,
-    glossary: els.glossary.value.trim(),
+    glossary,
     batchSize,
     maxChars,
     timeoutSec,
