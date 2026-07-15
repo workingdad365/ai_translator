@@ -12,6 +12,7 @@ const DEFAULT_PROVIDER = "openai";
 const PROVIDER_META = {
   openai: { apiKeyHint: "sk-...", modelHint: "예: gpt-5.4-mini" },
   openrouter: { apiKeyHint: "sk-or-...", modelHint: "예: deepseek/deepseek-v4-flash" },
+  laozhang: { apiKeyHint: "LaoZhang AI API 키", modelHint: "예: gpt-4o-mini" },
   gemini: { apiKeyHint: "Google AI Studio API 키", modelHint: "예: gemini-3.1-flash-lite" },
 };
 

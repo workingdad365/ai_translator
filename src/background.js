@@ -6,6 +6,7 @@
 
 import { translateSegments as openaiTranslate } from "./providers/openai.js";
 import { translateSegments as openrouterTranslate } from "./providers/openrouter.js";
+import { translateSegments as laozhangTranslate } from "./providers/laozhang.js";
 import { translateSegments as geminiTranslate } from "./providers/gemini.js";
 
 // 프로바이더 레지스트리. 향후 확장 시 이 객체에 항목을 추가함.
@@ -14,6 +15,7 @@ import { translateSegments as geminiTranslate } from "./providers/gemini.js";
 const PROVIDERS = {
   openai: openaiTranslate,
   openrouter: openrouterTranslate,
+  laozhang: laozhangTranslate,
   gemini: geminiTranslate,
 };
 
@@ -27,7 +29,7 @@ const DEFAULT_PROVIDER = "openai";
  * openai 자격증명으로 간주하여 하위 호환함.
  *
  * @returns {Promise<{provider: string, apiKey: string, model: string, tone: string, glossary: string, reasoningEffort: string, timeoutMs: number, debug: boolean}>}
- *   선택된 프로바이더의 설정값. tone 은 "banmal"(기본) 또는 "jondaenmal",
+ *   선택된 프로바이더의 설정값. tone 은 "banmal"(기본), "jondaenmal", "casual",
  *   reasoningEffort 는 추론 강도("none" 기본 / "minimal" / "low" / "default"),
  *   timeoutMs 는 요청 타임아웃(ms, 기본 60000), debug 는 상세 로그 여부.
  */

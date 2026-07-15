@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { buildSystemPrompt, createTranslator } from "../src/providers/openai-compatible.js";
+import { translateSegments as laozhangTranslate } from "../src/providers/laozhang.js";
 import { translateSegments as openrouterTranslate } from "../src/providers/openrouter.js";
 
 /**
@@ -20,7 +21,7 @@ async function translateWithContent(content, segments = ["Home"]) {
     ok: true,
     status: 200,
     headers: { get: () => null },
-    json: async () => ({
+    text: async () => JSON.stringify({
       choices: [{ finish_reason: "stop", message: { content } }],
       model: "test/model",
       provider: "test",
@@ -50,6 +51,22 @@ test("반말 프롬프트는 겸양 1인칭을 금지하고 나 계열을 사용
   assert.match(prompt, /I\/me\/my as 나\/나를\/내/);
   assert.match(prompt, /NEVER use the humble or polite forms 저, 저는, 제가/);
   assert.match(prompt, /NEVER `저는 그것을 구매하였다`/);
+});
+
+test("캐주얼체 프롬프트는 화자별 격식을 유지하고 과격한 게시판체를 금지한다", () => {
+  const prompt = buildSystemPrompt({ tone: "casual", glossary: "" });
+
+  assert.match(prompt, /Do NOT force one speech level across the batch or page/);
+  assert.match(prompt, /casual 반말 endings/);
+  assert.match(prompt, /conversational polite 해요체/);
+  assert.match(prompt, /formal 합니다체 or stronger honorific language/);
+  assert.match(prompt, /never normalize different speakers to one uniform tone/);
+  assert.match(prompt, /Do not switch speech levels randomly merely to create variety/);
+  assert.match(prompt, /응, 나도 그거 해봤어/);
+  assert.match(prompt, /공유해 주셔서 감사해요\. 저도 해봤어요/);
+  assert.match(prompt, /도움을 주셔서 진심으로 감사드립니다/);
+  assert.match(prompt, /hostile or extreme forums such as Ilbe or DC Inside/);
+  assert.match(prompt, /preserve its intent without making it harsher/);
 });
 
 test("프롬프트는 단어 수와 무관하게 제목과 질문을 번역하도록 지시한다", () => {
@@ -106,7 +123,7 @@ test("OpenRouter JSON 요청에 응답 치유 플러그인을 포함한다", asy
       ok: true,
       status: 200,
       headers: { get: () => null },
-      json: async () => ({
+      text: async () => JSON.stringify({
         choices: [{ finish_reason: "stop", message: { content: '{"translations":{"0":"홈"}}' } }],
         model: "test/model",
         provider: "test",
@@ -128,4 +145,80 @@ test("OpenRouter JSON 요청에 응답 치유 플러그인을 포함한다", asy
 
   assert.deepEqual(requestBody.response_format, { type: "json_object" });
   assert.deepEqual(requestBody.plugins, [{ id: "response-healing" }]);
+});
+
+test("LaoZhang AI 요청은 공식 백업 엔드포인트와 max_tokens를 사용한다", async () => {
+  const originalFetch = globalThis.fetch;
+  let requestUrl;
+  let requestOptions;
+  globalThis.fetch = async (url, options) => {
+    requestUrl = url;
+    requestOptions = options;
+    return {
+      ok: true,
+      status: 200,
+      headers: { get: () => null },
+      text: async () => JSON.stringify({
+        choices: [{ finish_reason: "stop", message: { content: '{"translations":{"0":"홈"}}' } }],
+        model: "gpt-4o-mini",
+      }),
+    };
+  };
+
+  try {
+    await laozhangTranslate({
+      apiKey: "laozhang-test-key",
+      model: "gpt-4o-mini",
+      segments: ["Home"],
+      reasoningEffort: "low",
+      timeoutMs: 1000,
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  const requestBody = JSON.parse(requestOptions.body);
+  assert.equal(requestUrl, "https://api-vip.laozhang.ai/v1/chat/completions");
+  assert.equal(requestOptions.headers.Authorization, "Bearer laozhang-test-key");
+  assert.equal(requestOptions.headers["Content-Type"], "application/json");
+  assert.equal(typeof requestBody.max_tokens, "number");
+  assert.equal("max_completion_tokens" in requestBody, false);
+  assert.equal("reasoning_effort" in requestBody, false);
+  assert.equal("reasoning" in requestBody, false);
+});
+
+test("성공 상태의 HTML 응답은 본문을 포함한 API 오류로 처리한다", async () => {
+  const originalFetch = globalThis.fetch;
+  let requestCount = 0;
+  globalThis.fetch = async () => {
+    requestCount++;
+    return {
+      ok: true,
+      status: 200,
+      headers: { get: (name) => (name === "content-type" ? "text/html; charset=utf-8" : null) },
+      text: async () => "<!-- * blocked by gateway --><html><body>Access denied</body></html>",
+    };
+  };
+
+  const translate = createTranslator({
+    endpoint: "https://example.test/chat/completions",
+    label: "Test",
+  });
+
+  try {
+    await assert.rejects(
+      translate({
+        apiKey: "test-key",
+        model: "test/model",
+        segments: ["Home"],
+        reasoningEffort: "default",
+        timeoutMs: 1000,
+      }),
+      /Test API returned HTML instead of JSON \(HTTP 200, content-type=text\/html; charset=utf-8\): <!-- \* blocked by gateway/,
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  assert.equal(requestCount, 1);
 });

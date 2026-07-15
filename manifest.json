@@ -13,6 +13,7 @@
   "host_permissions": [
     "https://api.openai.com/*",
     "https://openrouter.ai/*",
+    "https://api-vip.laozhang.ai/*",
     "https://generativelanguage.googleapis.com/*"
   ],
   "background": {

@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "check": "node --check src/background.js && node --check src/providers/openai-compatible.js && node --check src/providers/openai.js && node --check src/providers/openrouter.js && node --check src/providers/gemini.js && node --check src/content.js && node --check popup.js",
+    "check": "node --check src/background.js && node --check src/providers/openai-compatible.js && node --check src/providers/openai.js && node --check src/providers/openrouter.js && node --check src/providers/laozhang.js && node --check src/providers/gemini.js && node --check src/content.js && node --check popup.js",
     "test": "node --test"
   }
 }

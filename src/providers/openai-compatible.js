@@ -37,8 +37,8 @@ const BASE_RULES = [
   "Do not add any explanation or extra keys.",
 ];
 
-// 말투(문체) 지침. 페이지 전체가 여러 배치로 나뉘어 번역되므로, 모든 배치에
-// 동일한 말투 지침을 적용해야 존댓말/반말이 섞이지 않고 일관성이 유지됨.
+// 말투(문체) 지침. 고정 말투 모드는 페이지 전체에 같은 문체를 적용하고,
+// 캐주얼 모드는 게시물·댓글 화자별 격식과 태도의 차이를 유지함.
 const TONE_INSTRUCTIONS = {
   // 반말(해라체): 친구에게 말하는 구어체가 아니라, 한국 신문·통신사 기사에서 쓰는
   // 객관적 문어체 평서형(해라체). 구어체 종결어미(~야, ~해)와 속어를 금지하고,
@@ -62,6 +62,25 @@ const TONE_INSTRUCTIONS = {
     "Write ALL translations in polite, formal Korean (존댓말), " +
     "using endings such as ~습니다, ~합니다, ~입니다. " +
     "Keep the tone consistent across every segment.",
+  // 캐주얼체: Reddit 같은 일반 게시판에서 화자별 친밀도·격식·태도를 보존함.
+  // 일괄 반말/존댓말로 평탄화하거나 과격한 커뮤니티 고유 말투를 새로 만들지 않음.
+  casual:
+    "Write in natural Korean online-community speech suitable for a broad, civil discussion forum such as Reddit. " +
+    "Do NOT force one speech level across the batch or page, and do NOT assume all segments share one speaker. " +
+    "Infer each apparent speaker's register from the source wording, attitude, relationship cues, quotations, and context. " +
+    "Preserve meaningful differences in formality: use casual 반말 endings such as ~해, ~했어, ~거야 when the source is relaxed or intimate; " +
+    "conversational polite 해요체 such as ~해요, ~했어요, ~네요 when it is friendly or respectfully conversational; " +
+    "and formal 합니다체 or stronger honorific language when the source is notably formal or deferential. " +
+    "Keep a single apparent speaker's register coherent, but never normalize different speakers to one uniform tone. " +
+    "Do not switch speech levels randomly merely to create variety; every difference must be supported by the source or context. " +
+    "Choose first-person forms such as 나/내 or 저/제 and honorifics consistently with that speaker's inferred register. " +
+    "When the source does not provide enough evidence, default to friendly, moderately courteous mainstream Korean rather than an extreme style. " +
+    "Examples by register: `Yeah, I tried that too` may become `응, 나도 그거 해봤어`; " +
+    "`Thanks for sharing. I tried it too` may become `공유해 주셔서 감사해요. 저도 해봤어요`; " +
+    "and `We sincerely appreciate your assistance` may become `도움을 주셔서 진심으로 감사드립니다`. " +
+    "Keep the result conversational and readable, but do not introduce profanity, insults, demeaning language, aggressive slang, mock honorifics, " +
+    "or community-specific speech patterns associated with hostile or extreme forums such as Ilbe or DC Inside. " +
+    "If the source itself is rude or profane, preserve its intent without making it harsher. Use mainstream internet expressions sparingly and only when natural.",
 };
 
 const DEFAULT_TONE = "banmal";
@@ -105,7 +124,7 @@ function parseGlossary(glossary) {
  * 말투/용어집 설정을 반영한 시스템 프롬프트 문자열을 생성함.
  *
  * @param {object} params - 프롬프트 구성 옵션.
- * @param {string} [params.tone] - 말투 키("banmal" 또는 "jondaenmal"). 미지정 시 기본 반말.
+ * @param {string} [params.tone] - 말투 키("banmal", "jondaenmal", "casual"). 미지정 시 기본 반말.
  * @param {string} [params.glossary] - 용어집 원문(줄 단위 매핑 문자열).
  * @returns {string} 번역 요청에 사용할 시스템 프롬프트.
  */
@@ -665,7 +684,25 @@ async function attemptTranslate({ endpoint, headers, bodyStr, label, debug, wher
     });
   }
 
-  const data = await res.json();
+  const responseBody = await safeReadText(res);
+  let data;
+  try {
+    data = JSON.parse(responseBody);
+  } catch (err) {
+    const contentType = res.headers.get("content-type") || "unknown";
+    const isHtml = /^\s*(?:<!doctype\s+html|<html|<!--)/i.test(responseBody);
+    const responseKind = isHtml ? "HTML instead of JSON" : "invalid JSON";
+    const preview = responseBody.replace(/\s+/g, " ").trim().slice(0, 300) || "(empty body)";
+    logDebug(debug, where, `HTTP ${res.status} returned ${responseKind}`, {
+      contentType,
+      parseError: err.message,
+      body: responseBody.slice(0, 500),
+    });
+    throw makeError(
+      `${label} API returned ${responseKind} (HTTP ${res.status}, content-type=${contentType}): ${preview}`,
+      { retryable: false },
+    );
+  }
   const content = data?.choices?.[0]?.message?.content ?? "";
   // OpenRouter 는 라우팅한 상위 모델/공급자를 응답에 담을 수 있어 진단에 유용함.
   logDebug(debug, where, `HTTP 200 in ${Date.now() - startedAt}ms, content length=${content.length}`, {
@@ -711,7 +748,7 @@ export function createTranslator({
    * @param {string} params.apiKey - API 키 (Bearer 토큰).
    * @param {string} params.model - 사용할 모델 이름.
    * @param {string[]} params.segments - 번역할 원문 문자열 배열.
-   * @param {string} [params.tone] - 번역 말투 키("banmal"|"jondaenmal"). 미지정 시 기본 반말.
+  * @param {string} [params.tone] - 번역 말투 키("banmal"|"jondaenmal"|"casual"). 미지정 시 기본 반말.
    * @param {string} [params.glossary] - 고정 용어집 원문(줄 단위 `원어=번역어` 매핑).
    * @param {boolean} [params.debug] - 디버그 로그 출력 여부.
    * @returns {Promise<string[]>} 입력과 동일한 길이/순서의 한국어 번역 배열.
