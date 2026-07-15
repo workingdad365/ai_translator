@@ -23,6 +23,10 @@
   ]);
   const PROTECTED_SELECTOR = [...PROTECTED_TAGS].map((tag) => tag.toLowerCase()).join(",");
   const PROTECTED_ATTR = "data-ai-translator-protected";
+  const SEMANTIC_BLOCK_TAGS = new Set([
+    "P", "LI", "H1", "H2", "H3", "H4", "H5", "H6",
+    "BLOCKQUOTE", "DT", "DD", "FIGCAPTION",
+  ]);
   let protectedBlockSequence = 0;
 
   /**
@@ -34,6 +38,9 @@
    * @returns {boolean} 문장 안에서 부모 블록과 함께 번역할 인라인 요소이면 true.
    */
   function isInlineElement(el) {
+    // Reddit처럼 레이아웃 목적으로 p를 display:inline으로 바꾸는 페이지에서도
+    // 의미상 독립된 문단은 상위 컨테이너에 합쳐지지 않도록 블록 경계를 유지함.
+    if (SEMANTIC_BLOCK_TAGS.has(el.tagName)) return false;
     const display = getComputedStyle(el).display;
     return (
       display === "contents" ||
@@ -436,6 +443,7 @@
     // 제외 태그 하위 트리가 플레이스홀더로 축약된 HTML을 전송함.
     const segments = blocks.map((block) => block.html);
     const charCount = segments.reduce((total, segment) => total + segment.length, 0);
+    const startedAt = performance.now();
     log("content/translateBatch", `sending ${segments.length} segments`, segments);
     showToast(
       `${isRetry ? "누락 번역 재시도 중" : "번역 요청 중"}: ` +
@@ -449,23 +457,25 @@
       resp = await chrome.runtime.sendMessage({ type: "translate-batch", segments });
     } catch (err) {
       // 서비스 워커 미응답 등
+      const elapsedSec = ((performance.now() - startedAt) / 1000).toFixed(1);
       logError("content/translateBatch", `sendMessage failed: ${err.message}`);
-      showToast(`번역 오류: ${err.message}`, "error");
+      showToast(`번역 오류 (${elapsedSec}초): ${err.message}`, "error");
       return;
     }
 
+    const elapsedSec = ((performance.now() - startedAt) / 1000).toFixed(1);
     if (!resp || resp.error) {
       const reason = resp?.error ?? "알 수 없는 오류(서비스 워커 무응답)";
       logError("content/translateBatch", `provider error: ${reason}`, { segments });
       if (resp?.errorCode === "timeout" && resp.requestStats) {
         const { segmentCount, charCount, timeoutMs } = resp.requestStats;
         showToast(
-          `요청 시간 초과: ${segmentCount.toLocaleString()}개 블록, ` +
+          `요청 시간 초과 (${elapsedSec}초): ${segmentCount.toLocaleString()}개 블록, ` +
             `${charCount.toLocaleString()}자 전송, 제한 ${Math.round(timeoutMs / 1000)}초`,
           "error",
         );
       } else {
-        showToast(`번역 오류: ${reason}`, "error");
+        showToast(`번역 오류 (${elapsedSec}초): ${reason}`, "error");
       }
       // 오류가 발생하면 세션을 멈춰 반복 실패/과금을 방지함.
       stopTranslation();
@@ -517,7 +527,7 @@
       );
       await translateBatch(missingBlocks, false, true);
     }
-    showToast("현재 영역 번역 완료", "info");
+    showToast(`현재 영역 번역 완료 (${elapsedSec}초)`, "info");
   }
 
   /** 번역 세션을 시작함. 관찰자/스캔을 초기화하고 첫 스캔을 수행함. */

@@ -29,7 +29,6 @@
           <select id="provider">
             <option value="openai">OpenAI</option>
             <option value="openrouter">OpenRouter</option>
-            <option value="laozhang">LaoZhang AI</option>
             <option value="gemini">Gemini (Interactions API)</option>
           </select>
         </label>
@@ -40,11 +39,18 @@
                  placeholder="sk-...">
         </label>
 
-        <label class="field">
+        <div class="field">
           <span>모델</span>
-          <input id="model" type="text" autocomplete="off" spellcheck="false"
-                 placeholder="예: gpt-5.4-mini">
-        </label>
+          <div class="model-picker">
+            <input id="model" type="text" list="model-list" autocomplete="off"
+                   spellcheck="false" placeholder="예: gpt-5.4-mini">
+            <button id="fetch-models-button" class="secondary-button" type="button">
+              모델 가져오기
+            </button>
+          </div>
+          <datalist id="model-list"></datalist>
+          <p id="model-notice" class="field-notice" role="status" aria-live="polite"></p>
+        </div>
 
         <label class="field">
           <span>말투</span>

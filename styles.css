@@ -17,7 +17,7 @@
 }
 
 body {
-  width: 320px;
+  width: 400px;
   margin: 0;
   padding: 16px;
   background: var(--bg);
@@ -90,6 +90,11 @@ body {
 
 .secondary-button:hover {
   background: var(--panel);
+}
+
+.secondary-button:disabled {
+  cursor: wait;
+  opacity: 0.65;
 }
 
 .notice {
@@ -178,6 +183,31 @@ body {
   border-radius: 4px;
   background: var(--bg);
   font-size: 11px;
+}
+
+.model-picker {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.model-picker .secondary-button {
+  white-space: nowrap;
+}
+
+.field-notice {
+  min-height: 18px;
+  margin: 4px 0 0;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.field-notice[data-kind="error"] {
+  color: var(--error);
+}
+
+.field-notice[data-kind="success"] {
+  color: var(--success);
 }
 
 .field input:focus,

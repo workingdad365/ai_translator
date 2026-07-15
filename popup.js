@@ -7,13 +7,26 @@
 //   프로바이더에 저장해 둔 값이 폼에 표시됨.
 
 const DEFAULT_PROVIDER = "openai";
+const AVAILABLE_PROVIDERS = new Set(["openai", "openrouter", "gemini"]);
 
 // 프로바이더별 입력 힌트(placeholder). 지원 프로바이더 추가 시 여기에 등록함.
 const PROVIDER_META = {
-  openai: { apiKeyHint: "sk-...", modelHint: "예: gpt-5.4-mini" },
-  openrouter: { apiKeyHint: "sk-or-...", modelHint: "예: deepseek/deepseek-v4-flash" },
+  openai: {
+    apiKeyHint: "sk-...",
+    modelHint: "예: gpt-5.4-mini",
+    modelsEndpoint: "https://api.openai.com/v1/models",
+  },
+  openrouter: {
+    apiKeyHint: "sk-or-...",
+    modelHint: "예: deepseek/deepseek-v4-flash",
+    modelsEndpoint: "https://openrouter.ai/api/v1/models",
+  },
   laozhang: { apiKeyHint: "LaoZhang AI API 키", modelHint: "예: gpt-4o-mini" },
-  gemini: { apiKeyHint: "Google AI Studio API 키", modelHint: "예: gemini-3.1-flash-lite" },
+  gemini: {
+    apiKeyHint: "Google AI Studio API 키",
+    modelHint: "예: gemini-3.1-flash-lite",
+    modelsEndpoint: "https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000",
+  },
 };
 
 // 저장소 기본값. credentials 는 { [provider]: { apiKey, model } } 구조이며,
@@ -51,6 +64,9 @@ const els = {
   provider: document.getElementById("provider"),
   apiKey: document.getElementById("api-key"),
   model: document.getElementById("model"),
+  modelList: document.getElementById("model-list"),
+  fetchModels: document.getElementById("fetch-models-button"),
+  modelNotice: document.getElementById("model-notice"),
   tone: document.getElementById("tone"),
   reasoningEffort: document.getElementById("reasoning-effort"),
   glossary: document.getElementById("glossary"),
@@ -162,6 +178,81 @@ function fillCredentialFields(provider) {
   els.model.placeholder = meta.modelHint;
 }
 
+/** 조회된 모델 후보와 조회 상태를 초기화함. */
+function clearModelOptions() {
+  els.modelList.replaceChildren();
+  notify(els.modelNotice, "");
+}
+
+/**
+ * 선택 프로바이더의 모델 목록 API를 호출해 모델 ID 배열을 반환함.
+ *
+ * @param {string} provider - 조회할 프로바이더 키.
+ * @param {string} apiKey - 모델 목록 조회에 사용할 API 키.
+ * @returns {Promise<string[]>} 중복을 제거하고 이름순으로 정렬한 모델 ID 배열.
+ */
+async function requestModels(provider, apiKey) {
+  const meta = PROVIDER_META[provider];
+  if (!meta?.modelsEndpoint) throw new Error("이 프로바이더는 모델 조회를 지원하지 않습니다.");
+
+  const headers = provider === "gemini"
+    ? { "x-goog-api-key": apiKey }
+    : { Authorization: `Bearer ${apiKey}` };
+  const response = await fetch(meta.modelsEndpoint, { headers });
+  if (!response.ok) {
+    throw new Error(`모델 목록 요청 실패 (HTTP ${response.status})`);
+  }
+
+  const data = await response.json();
+  const rawModels = provider === "gemini" ? data?.models : data?.data;
+  if (!Array.isArray(rawModels)) throw new Error("모델 목록 응답 형식이 올바르지 않습니다.");
+
+  return [...new Set(
+    rawModels
+      .map((item) => item?.id || item?.name?.replace(/^models\//, ""))
+      .filter((modelId) => typeof modelId === "string" && modelId.length > 0),
+  )].sort((left, right) => left.localeCompare(right));
+}
+
+/** 모델 목록을 조회해 직접 입력란에 연결된 후보 목록으로 표시함. */
+async function fetchModelOptions() {
+  const provider = els.provider.value;
+  const apiKey = els.apiKey.value.trim();
+  if (!apiKey) {
+    notify(els.modelNotice, "API 키를 먼저 입력하세요.", "error");
+    els.apiKey.focus();
+    return;
+  }
+
+  els.fetchModels.disabled = true;
+  els.fetchModels.textContent = "가져오는 중...";
+  notify(els.modelNotice, "모델 목록을 조회하고 있습니다.");
+
+  try {
+    const models = await requestModels(provider, apiKey);
+    els.modelList.replaceChildren(
+      ...models.map((modelId) => {
+        const option = document.createElement("option");
+        option.value = modelId;
+        return option;
+      }),
+    );
+    notify(
+      els.modelNotice,
+      models.length > 0
+        ? `${models.length}개 모델을 가져왔습니다. 입력란에서 선택하세요.`
+        : "사용 가능한 모델이 없습니다.",
+      models.length > 0 ? "success" : "error",
+    );
+    if (models.length > 0) els.model.focus();
+  } catch (error) {
+    notify(els.modelNotice, error.message || "모델 목록을 가져오지 못했습니다.", "error");
+  } finally {
+    els.fetchModels.disabled = false;
+    els.fetchModels.textContent = "모델 가져오기";
+  }
+}
+
 /** 현재 폼의 API 키/모델 입력값을 표시 중인 프로바이더 자격증명 캐시에 반영함. */
 function captureShownCredentials() {
   credentials[shownProvider] = {
@@ -173,6 +264,7 @@ function captureShownCredentials() {
 /** 저장소의 설정값을 입력 폼에 반영함. */
 async function loadSettings() {
   const cfg = await chrome.storage.local.get(STORAGE_DEFAULTS);
+  const provider = AVAILABLE_PROVIDERS.has(cfg.provider) ? cfg.provider : DEFAULT_PROVIDER;
 
   credentials =
     cfg.credentials && typeof cfg.credentials === "object" ? { ...cfg.credentials } : {};
@@ -182,7 +274,7 @@ async function loadSettings() {
     credentials.openai = { apiKey: cfg.apiKey, model: cfg.model };
   }
 
-  els.provider.value = cfg.provider;
+  els.provider.value = provider;
   els.tone.value = cfg.tone;
   els.reasoningEffort.value = cfg.reasoningEffort;
   els.glossary.value = cfg.glossary?.trim() || DEFAULT_GLOSSARY;
@@ -191,11 +283,11 @@ async function loadSettings() {
   els.timeoutSec.value = normalizeTimeoutSec(cfg.timeoutSec);
   els.debug.checked = Boolean(cfg.debug);
 
-  shownProvider = cfg.provider;
-  fillCredentialFields(cfg.provider);
+  shownProvider = provider;
+  fillCredentialFields(provider);
 
   // 선택 프로바이더의 키/모델이 비어 있으면 설정 영역을 펼쳐 입력을 유도함.
-  const cred = credentials[cfg.provider] || {};
+  const cred = credentials[provider] || {};
   if (!cred.apiKey || !cred.model) {
     els.settings.open = true;
   }
@@ -322,7 +414,10 @@ els.provider.addEventListener("change", () => {
   captureShownCredentials();
   shownProvider = els.provider.value;
   fillCredentialFields(shownProvider);
+  clearModelOptions();
 });
+
+els.fetchModels.addEventListener("click", fetchModelOptions);
 
 els.save.addEventListener("click", async () => {
   await saveSettings();
