@@ -60,6 +60,7 @@
   const translatedBlocks = new WeakSet(); // 번역 완료된 블록 요소
   const queuedBlocks = new WeakSet(); // 큐에 이미 담긴 블록 요소(중복 방지)
   let observedEls = new WeakSet(); // IntersectionObserver 로 관찰 중인 블록(세션 중지 시 교체)
+  let mutationRoots = new WeakSet(); // MutationObserver 로 감시 중인 문서/ShadowRoot
 
   const pendingBlocks = new Set(); // 뷰포트 진입 후 번역 대기 중인 블록 요소
 
@@ -183,31 +184,59 @@
   }
 
   /**
-   * 문서 전체를 순회하여 번역 대상 leaf 블록을 관찰 등록함.
-   * 관찰 중인 블록이 뷰포트에 진입하면 해당 블록이 번역 큐에 추가됨.
+   * 문서 또는 open Shadow DOM을 MutationObserver 감시 대상으로 등록함.
+   *
+   * @param {Document|ShadowRoot} root - 동적 변경을 감시할 루트.
    */
-  function scanAndObserve() {
-    if (!active || !document.body) return;
+  function observeMutationRoot(root) {
+    if (!mo || mutationRoots.has(root)) return;
+    mutationRoots.add(root);
+    mo.observe(root, { childList: true, subtree: true });
+  }
 
-    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {
+  /**
+   * 지정 루트의 텍스트 블록을 수집하고, 내부 open Shadow DOM도 재귀적으로 처리함.
+   *
+   * @param {Document|ShadowRoot|Element} root - 스캔할 DOM 루트.
+   * @param {Set<Element>} blocks - 발견한 번역 블록 집합.
+   */
+  function collectBlocks(root, blocks) {
+    if (root instanceof Document || root instanceof ShadowRoot) {
+      observeMutationRoot(root);
+    }
+
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
       acceptNode(node) {
-        // 문자가 있는 텍스트 노드만 후보로 삼음(공백/기호/숫자뿐인 노드 제외).
         return node.nodeValue && /\p{L}/u.test(node.nodeValue)
           ? NodeFilter.FILTER_ACCEPT
           : NodeFilter.FILTER_REJECT;
       },
     });
 
-    // 텍스트 노드를 블록 조상 단위로 집계함(중복 블록은 Set 으로 한 번만).
-    const blocks = new Set();
     let node;
     while ((node = walker.nextNode())) {
       const parent = node.parentElement;
-      // 텍스트의 직접 부모가 제외 태그(code/pre 등)면 건너뜀.
       if (!parent || SKIP_TAGS.has(parent.tagName)) continue;
       const block = blockContainer(node);
       if (block) blocks.add(block);
     }
+
+    const elements = root.querySelectorAll ? root.querySelectorAll("*") : [];
+    for (const el of elements) {
+      if (el.shadowRoot) collectBlocks(el.shadowRoot, blocks);
+    }
+  }
+
+  /**
+   * 문서 전체를 순회하여 번역 대상 leaf 블록을 관찰 등록함.
+   * 관찰 중인 블록이 뷰포트에 진입하면 해당 블록이 번역 큐에 추가됨.
+   */
+  function scanAndObserve() {
+    if (!active || !document.body) return;
+
+    // 텍스트 노드를 블록 조상 단위로 집계함(중복 블록은 Set 으로 한 번만).
+    const blocks = new Set();
+    collectBlocks(document.body, blocks);
 
     for (const el of blocks) {
       if (!isTranslatableBlock(el)) continue;
@@ -401,11 +430,19 @@
    * @param {Array<{el: Element, html: string, protectedNodes: Element[], protectedId: string}>} blocks
    *   이 배치에 속한 준비된 번역 블록 배열.
   * @param {boolean} [retryMissing] - 누락·빈 응답 블록을 한 번 재요청할지 여부.
+  * @param {boolean} [isRetry] - 누락 세그먼트 재요청인지 여부.
    */
-  async function translateBatch(blocks, retryMissing = true) {
+  async function translateBatch(blocks, retryMissing = true, isRetry = false) {
     // 제외 태그 하위 트리가 플레이스홀더로 축약된 HTML을 전송함.
     const segments = blocks.map((block) => block.html);
+    const charCount = segments.reduce((total, segment) => total + segment.length, 0);
     log("content/translateBatch", `sending ${segments.length} segments`, segments);
+    showToast(
+      `${isRetry ? "누락 번역 재시도 중" : "번역 요청 중"}: ` +
+        `${segments.length.toLocaleString()}개 블록, ` +
+        `${charCount.toLocaleString()}자`,
+      "progress",
+    );
 
     let resp;
     try {
@@ -478,9 +515,9 @@
         "content/translateBatch",
         `retrying ${missingBlocks.length} missing translation segments once`,
       );
-      await translateBatch(missingBlocks, false);
+      await translateBatch(missingBlocks, false, true);
     }
-    showToast("번역 중…", "info");
+    showToast("현재 영역 번역 완료", "info");
   }
 
   /** 번역 세션을 시작함. 관찰자/스캔을 초기화하고 첫 스캔을 수행함. */
@@ -498,7 +535,8 @@
     // 번역 결과 innerHTML 교체도 childList 변경을 유발하지만, 해당 블록은 이미
     // translatedBlocks 에 있어 재수집되지 않으므로 무한 루프가 생기지 않음.
     mo = new MutationObserver(() => scheduleScan());
-    mo.observe(document.body, { childList: true, subtree: true });
+    mutationRoots = new WeakSet();
+    observeMutationRoot(document);
 
     showToast("번역을 시작합니다…", "info");
     scanAndObserve();
@@ -515,6 +553,7 @@
     // WeakSet 은 clear() 가 없어 참조 교체로 초기화함.
     // 다음 세션에서 io.observe 재등록이 정상 동작하도록 관찰 집합을 비움.
     observedEls = new WeakSet();
+    mutationRoots = new WeakSet();
   }
 
   // ── 화면 우하단 상태 토스트 ─────────────────────────────────────────────
@@ -523,11 +562,11 @@
 
   /**
    * 페이지 우하단에 상태 메시지를 표시함.
-   * info 메시지는 잠시 후 자동으로 사라지고, error 메시지는 진단을 놓치지 않도록
-   * 자동으로 사라지지 않으며 클릭하면 닫힘.
+    * info 메시지는 잠시 후 사라지고, progress 메시지는 작업 중 계속 표시함.
+    * error 메시지는 진단을 놓치지 않도록 유지하며 클릭하면 닫힘.
    *
    * @param {string} text - 표시할 메시지.
-   * @param {"info"|"error"} [kind] - 메시지 종류(색상 구분용).
+    * @param {"info"|"progress"|"error"} [kind] - 메시지 종류(표시 시간·색상 구분용).
    */
   function showToast(text, kind = "info") {
     if (!toastEl) {
@@ -555,6 +594,7 @@
     }
 
     const isError = kind === "error";
+    const isProgress = kind === "progress";
     toastEl.textContent = isError ? `${text} (클릭하여 닫기)` : text;
     toastEl.title = isError ? "클릭하여 닫기" : "";
     toastEl.style.background = isError ? "#b91c1c" : "#1f2937";
@@ -564,8 +604,8 @@
     toastEl.style.cursor = isError ? "pointer" : "default";
 
     if (toastTimer) clearTimeout(toastTimer);
-    // 오류는 자동으로 숨기지 않음(사용자가 확인/클릭할 때까지 유지).
-    if (isError) return;
+    // 오류와 진행 상태는 완료 또는 다음 상태 메시지가 표시될 때까지 유지함.
+    if (isError || isProgress) return;
     toastTimer = setTimeout(() => {
       if (toastEl) toastEl.style.opacity = "0";
     }, 1500);
