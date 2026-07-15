@@ -65,6 +65,7 @@ test("빈 용어집에는 기본 고유명사 번역을 적용한다", () => {
   assert.match(prompt, /"Sam Altman" => "샘 올트먼"/);
   assert.match(prompt, /"Elon Musk" => "일론 머스크"/);
   assert.match(prompt, /"Gemini" => "제미나이"/);
+  assert.match(prompt, /"Palantir" => "팔란티어"/);
 });
 
 test("완전한 JSON 객체 뒤의 불필요한 닫는 중괄호를 무시한다", async () => {

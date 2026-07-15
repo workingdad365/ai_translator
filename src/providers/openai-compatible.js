@@ -69,6 +69,7 @@ const DEFAULT_GLOSSARY = [
   "Sam Altman=샘 올트먼",
   "Elon Musk=일론 머스크",
   "Gemini=제미나이",
+  "Palantir=팔란티어"
 ].join("\n");
 
 /**
