@@ -204,6 +204,12 @@
     return true;
   }
 
+  /** Reddit이 실시간으로 갱신하는 좋아요·댓글 카운터 블록인지 판별함. */
+  function isRedditLiveCounterBlock(el) {
+    if (!/(^|\.)reddit\.com$/i.test(location.hostname)) return false;
+    return el.matches("faceplate-number") || Boolean(el.querySelector("faceplate-number"));
+  }
+
   /**
    * 블록 요소가 번역 대상인지 판별함.
    *
@@ -215,6 +221,7 @@
     if (SKIP_TAGS.has(el.tagName)) return false;
     if (el.isContentEditable) return false;
     if (el.closest("[translate=no]")) return false;
+    if (isRedditLiveCounterBlock(el)) return false;
     if (!isLeafBlock(el)) return false; // 블록 자식을 가진 컨테이너는 제외
     const text = el.textContent;
     if (!text || !/\p{L}/u.test(text)) return false; // 문자가 없는 블록 제외
@@ -361,15 +368,36 @@
    * @param {MutationRecord[]} mutations - DOM 변경 목록.
    */
   function handleMutations(mutations) {
+    let shouldScan = false;
     for (const mutation of mutations) {
       let el = mutation.target instanceof Element
         ? mutation.target
         : mutation.target.parentElement;
+      if (el?.closest("faceplate-number") && /(^|\.)reddit\.com$/i.test(location.hostname)) {
+        continue;
+      }
+      shouldScan = true;
 
       while (el) {
         const state = appliedBlockStates.get(el);
         if (state) {
           if (state.overlay) {
+            const currentSourceText = normalizeBlockText(el.textContent);
+            if (currentSourceText !== state.sourceText) {
+              clearTranslationOverlay(el);
+              appliedBlockStates.delete(el);
+              translatedBlocks.delete(el);
+              queuedBlocks.delete(el);
+              if (state.counted) translatedBlockCount--;
+              log("content/handleMutations", "overlay target source changed; scheduling retranslation", {
+                tagName: el.tagName,
+                id: el.id,
+                previousSourceText: state.sourceText,
+                currentSourceText,
+              });
+              renderProgress();
+              break;
+            }
             state.html = el.innerHTML;
             break;
           }
@@ -466,7 +494,7 @@
         }
       }
     }
-    scheduleScan();
+    if (shouldScan) scheduleScan();
   }
 
   /** @param {Element} el - 화면 적용에 실패한 블록. */
@@ -611,6 +639,22 @@
     el.style.setProperty("--ai-translator-overlay-line-height", computed.lineHeight);
     el.setAttribute(OVERLAY_ATTR, translatedText);
     return true;
+  }
+
+  /** 같은 DOM 요소가 새 원문에 재사용될 때 기존 번역 오버레이를 제거함. */
+  function clearTranslationOverlay(el) {
+    el.removeAttribute(OVERLAY_ATTR);
+    for (const property of [
+      "--ai-translator-overlay-color",
+      "--ai-translator-overlay-font-family",
+      "--ai-translator-overlay-font-size",
+      "--ai-translator-overlay-font-style",
+      "--ai-translator-overlay-font-weight",
+      "--ai-translator-overlay-letter-spacing",
+      "--ai-translator-overlay-line-height",
+    ]) {
+      el.style.removeProperty(property);
+    }
   }
 
   /**
@@ -766,6 +810,15 @@
     return (text || "").replace(/\s+/g, " ").trim();
   }
 
+  /** 요청 당시 원문과 현재 요소의 내용 및 링크가 같은지 판별함. */
+  function matchesPreparedBlock(el, block) {
+    return (
+      el.isConnected &&
+      normalizeBlockText(el.textContent) === block.sourceText &&
+      (!block.href || el.getAttribute("href") === block.href)
+    );
+  }
+
   /**
    * 요청 중 페이지가 원래 요소를 교체한 경우 같은 루트에서 현재 블록을 다시 찾음.
    *
@@ -773,7 +826,7 @@
    * @returns {Element|null} 현재 문서에 연결된 대응 요소.
    */
   function resolveCurrentBlock(block) {
-    if (block.el.isConnected) return block.el;
+    if (matchesPreparedBlock(block.el, block)) return block.el;
     const roots = [];
     if (block.root instanceof Document || block.root instanceof ShadowRoot) roots.push(block.root);
     if (block.root !== document) roots.push(document);
@@ -1006,14 +1059,21 @@
               }
             }
           } else {
+            const sourceChanged = block.el.isConnected && !matchesPreparedBlock(block.el, block);
             logError("content/translateBatch", "translation target or placeholders are invalid; keeping original", {
               targetFound: Boolean(target),
               placeholdersValid: Boolean(restored),
+              sourceChanged,
               sourceText: block.sourceText,
               segment: block.html,
               translation: html,
             });
             queuedBlocks.delete(block.el);
+            if (sourceChanged) {
+              markBlockApplied(block.el);
+              scheduleScan();
+              return;
+            }
             markBlockFailed(block.el);
             return;
           }

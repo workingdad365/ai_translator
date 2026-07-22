@@ -35,6 +35,7 @@ const DEFAULT_BATCH_SIZE = 30;
 const DEFAULT_MAX_CHARS = 5000;
 const DEFAULT_TIMEOUT_SEC = 60;
 const DEFAULT_CONCURRENCY = 3;
+const AUTO_SAVE_DELAY_MS = 300;
 const DEFAULT_GLOSSARY = [
   "Sam Altman=샘 올트먼",
   "Elon Musk=일론 머스크",
@@ -86,6 +87,7 @@ const els = {
 
 // 현재 활성 탭의 번역 세션 활성 여부(버튼 표시 상태 결정).
 let translating = false;
+let autoSaveTimer = null;
 
 /**
  * 배치 크기를 1~100 범위의 정수로 정규화함. 유효하지 않으면 기본값을 반환함.
@@ -335,24 +337,28 @@ async function refreshStatus() {
 /**
  * 현재 폼 값을 저장소에 저장함. API 키/모델은 선택된 프로바이더별로 저장함.
  *
+ * @param {boolean} [updateForm] - 정규화한 값을 입력 폼에도 반영할지 여부.
  * @returns {Promise<{provider: string, apiKey: string, model: string}>}
  *   선택된 프로바이더의 검증용 설정값(번역 시작 전 필수값 확인에 사용).
  */
-async function saveSettings() {
+async function saveSettings(updateForm = true) {
   captureShownCredentials();
   const provider = els.provider.value;
 
-  // 입력값을 정규화한 뒤 폼에도 되돌려 표시(범위를 벗어난 입력 보정을 사용자에게 반영).
+  // 수동 저장과 번역 시작 시에는 보정된 값을 폼에도 표시하되,
+  // 자동 저장 중에는 사용자가 작성 중인 입력값을 덮어쓰지 않음.
   const batchSize = normalizeBatchSize(els.batchSize.value);
   const maxChars = normalizeMaxChars(els.maxChars.value);
   const concurrency = normalizeConcurrency(els.concurrency.value);
   const timeoutSec = normalizeTimeoutSec(els.timeoutSec.value);
-  els.batchSize.value = batchSize;
-  els.maxChars.value = maxChars;
-  els.concurrency.value = concurrency;
-  els.timeoutSec.value = timeoutSec;
   const glossary = els.glossary.value.trim() || DEFAULT_GLOSSARY;
-  els.glossary.value = glossary;
+  if (updateForm) {
+    els.batchSize.value = batchSize;
+    els.maxChars.value = maxChars;
+    els.concurrency.value = concurrency;
+    els.timeoutSec.value = timeoutSec;
+    els.glossary.value = glossary;
+  }
 
   await chrome.storage.local.set({
     provider,
@@ -369,6 +375,28 @@ async function saveSettings() {
 
   const cred = credentials[provider] || {};
   return { provider, apiKey: cred.apiKey || "", model: cred.model || "" };
+}
+
+/** 변경된 설정을 짧게 모아 저장함. 연속 입력 시 불필요한 저장 요청을 줄임. */
+function scheduleAutoSave() {
+  if (autoSaveTimer) clearTimeout(autoSaveTimer);
+  autoSaveTimer = setTimeout(async () => {
+    autoSaveTimer = null;
+    try {
+      await saveSettings(false);
+      notify(els.saveNotice, "변경사항이 자동 저장되었습니다.", "success");
+    } catch {
+      notify(els.saveNotice, "설정을 자동 저장하지 못했습니다.", "error");
+    }
+  }, AUTO_SAVE_DELAY_MS);
+}
+
+/** 팝업이 닫히기 전에 대기 중인 변경사항을 즉시 저장함. */
+function flushAutoSave() {
+  if (!autoSaveTimer) return;
+  clearTimeout(autoSaveTimer);
+  autoSaveTimer = null;
+  void saveSettings(false).catch(() => {});
 }
 
 /**
@@ -437,14 +465,36 @@ els.provider.addEventListener("change", () => {
   shownProvider = els.provider.value;
   fillCredentialFields(shownProvider);
   clearModelOptions();
+  scheduleAutoSave();
 });
 
 els.fetchModels.addEventListener("click", fetchModelOptions);
 
+for (const el of [
+  els.apiKey,
+  els.model,
+  els.glossary,
+  els.tone,
+  els.reasoningEffort,
+  els.batchSize,
+  els.maxChars,
+  els.concurrency,
+  els.timeoutSec,
+  els.debug,
+]) {
+  el.addEventListener("input", scheduleAutoSave);
+}
+
 els.save.addEventListener("click", async () => {
+  if (autoSaveTimer) {
+    clearTimeout(autoSaveTimer);
+    autoSaveTimer = null;
+  }
   await saveSettings();
   notify(els.saveNotice, "설정을 저장했습니다.", "success");
 });
+
+window.addEventListener("pagehide", flushAutoSave);
 
 // 초기화: 설정 로드 후 현재 탭의 번역 상태를 반영함.
 loadSettings();
