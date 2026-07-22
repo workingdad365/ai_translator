@@ -80,13 +80,19 @@
         <label class="field">
           <span>배치 크기 (한 요청당 세그먼트 수, 1~100)</span>
           <input id="batch-size" type="number" min="1" max="100" step="1"
-                 inputmode="numeric" placeholder="예: 40 (느린 모델은 작게)">
+                 inputmode="numeric" placeholder="예: 30 (느린 모델은 작게)">
         </label>
 
         <label class="field">
           <span>배치 문자 수 캡 (한 요청당 최대 문자, 500~20000)</span>
           <input id="max-chars" type="number" min="500" max="20000" step="100"
-                 inputmode="numeric" placeholder="예: 3000 (세그먼트 수와 함께 먼저 도달하는 쪽 적용)">
+                 inputmode="numeric" placeholder="예: 5000 (세그먼트 수와 함께 먼저 도달하는 쪽 적용)">
+        </label>
+
+        <label class="field">
+          <span>동시 실행 수 (배치를 동시에 몇 개 요청할지, 1~10 · 높을수록 빠름)</span>
+          <input id="concurrency" type="number" min="1" max="10" step="1"
+                 inputmode="numeric" placeholder="예: 3 (레이트리밋이 나면 낮추세요)">
         </label>
 
         <label class="field">

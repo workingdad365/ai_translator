@@ -32,8 +32,9 @@ const PROVIDER_META = {
 // 저장소 기본값. credentials 는 { [provider]: { apiKey, model } } 구조이며,
 // apiKey/model 최상위 키는 과거 단일 형식과의 하위 호환을 위해서만 읽음.
 const DEFAULT_BATCH_SIZE = 30;
-const DEFAULT_MAX_CHARS = 8000;
+const DEFAULT_MAX_CHARS = 5000;
 const DEFAULT_TIMEOUT_SEC = 60;
+const DEFAULT_CONCURRENCY = 3;
 const DEFAULT_GLOSSARY = [
   "Sam Altman=샘 올트먼",
   "Elon Musk=일론 머스크",
@@ -49,6 +50,7 @@ const STORAGE_DEFAULTS = {
   reasoningEffort: "none",
   batchSize: DEFAULT_BATCH_SIZE,
   maxChars: DEFAULT_MAX_CHARS,
+  concurrency: DEFAULT_CONCURRENCY,
   timeoutSec: DEFAULT_TIMEOUT_SEC,
   debug: false,
   apiKey: "",
@@ -72,6 +74,7 @@ const els = {
   glossary: document.getElementById("glossary"),
   batchSize: document.getElementById("batch-size"),
   maxChars: document.getElementById("max-chars"),
+  concurrency: document.getElementById("concurrency"),
   timeoutSec: document.getElementById("timeout-sec"),
   debug: document.getElementById("debug"),
   translate: document.getElementById("translate-button"),
@@ -113,6 +116,21 @@ function normalizeMaxChars(value) {
   const n = Math.trunc(Number(value));
   if (!Number.isFinite(n)) return DEFAULT_MAX_CHARS;
   return Math.min(20000, Math.max(500, n));
+}
+
+/**
+ * 동시 실행 배치 수를 1~10 범위의 정수로 정규화함. 유효하지 않으면 기본값을 반환함.
+ *
+ * @param {*} value - 검증할 값.
+ * @returns {number} 정규화된 동시 실행 수(1~10).
+ */
+function normalizeConcurrency(value) {
+  if (value === null || value === undefined || String(value).trim() === "") {
+    return DEFAULT_CONCURRENCY;
+  }
+  const n = Math.trunc(Number(value));
+  if (!Number.isFinite(n)) return DEFAULT_CONCURRENCY;
+  return Math.min(10, Math.max(1, n));
 }
 
 /**
@@ -280,6 +298,7 @@ async function loadSettings() {
   els.glossary.value = cfg.glossary?.trim() || DEFAULT_GLOSSARY;
   els.batchSize.value = normalizeBatchSize(cfg.batchSize);
   els.maxChars.value = normalizeMaxChars(cfg.maxChars);
+  els.concurrency.value = normalizeConcurrency(cfg.concurrency);
   els.timeoutSec.value = normalizeTimeoutSec(cfg.timeoutSec);
   els.debug.checked = Boolean(cfg.debug);
 
@@ -326,9 +345,11 @@ async function saveSettings() {
   // 입력값을 정규화한 뒤 폼에도 되돌려 표시(범위를 벗어난 입력 보정을 사용자에게 반영).
   const batchSize = normalizeBatchSize(els.batchSize.value);
   const maxChars = normalizeMaxChars(els.maxChars.value);
+  const concurrency = normalizeConcurrency(els.concurrency.value);
   const timeoutSec = normalizeTimeoutSec(els.timeoutSec.value);
   els.batchSize.value = batchSize;
   els.maxChars.value = maxChars;
+  els.concurrency.value = concurrency;
   els.timeoutSec.value = timeoutSec;
   const glossary = els.glossary.value.trim() || DEFAULT_GLOSSARY;
   els.glossary.value = glossary;
@@ -341,6 +362,7 @@ async function saveSettings() {
     glossary,
     batchSize,
     maxChars,
+    concurrency,
     timeoutSec,
     debug: els.debug.checked,
   });

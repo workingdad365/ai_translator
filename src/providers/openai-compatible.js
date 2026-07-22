@@ -705,10 +705,14 @@ async function attemptTranslate({ endpoint, headers, bodyStr, label, debug, wher
   }
   const content = data?.choices?.[0]?.message?.content ?? "";
   // OpenRouter 는 라우팅한 상위 모델/공급자를 응답에 담을 수 있어 진단에 유용함.
+  // cachedTokens 는 프롬프트 캐싱이 실제로 히트했는지 확인용(입력 토큰 중 캐시에서 읽은 수).
+  // 값이 0/undefined 면 미히트(시스템 프롬프트가 최소 캐시 토큰 미만이거나 첫 요청 등).
   logDebug(debug, where, `HTTP 200 in ${Date.now() - startedAt}ms, content length=${content.length}`, {
     routedModel: data?.model,
     provider: data?.provider,
     finishReason: data?.choices?.[0]?.finish_reason,
+    promptTokens: data?.usage?.prompt_tokens,
+    cachedTokens: data?.usage?.prompt_tokens_details?.cached_tokens,
   });
 
   return parseTranslationResponse(content, segments, { debug, where });
@@ -730,6 +734,10 @@ async function attemptTranslate({ endpoint, headers, bodyStr, label, debug, wher
  *   null 이면 추론 제어 파라미터를 보내지 않음.
  * @param {Record<string, *>|((context: {useResponseFormat: boolean, effort: string|null}) => Record<string, *>)} [config.extraBody]
  *   프로바이더별 요청 본문 추가 필드 또는 생성 함수. 공통 필드는 덮어쓸 수 없음.
+ * @param {boolean} [config.cacheSystemPrompt] - 시스템 프롬프트에 명시적 프롬프트 캐싱
+ *   브레이크포인트(`cache_control`)를 붙일지 여부. OpenRouter 처럼 블록 단위 캐시 마커를
+ *   프로바이더별 형식으로 자동 변환하고 미지원 모델에서는 무시하는 경우에만 켬. OpenAI
+ *   직접 호출은 자동(암묵적) 캐싱이라 켤 필요가 없음. 기본값 false.
  * @returns {(params: {apiKey: string, model: string, segments: string[], tone?: string, glossary?: string, reasoningEffort?: string, debug?: boolean}) => Promise<string[]>}
  *   입력과 동일한 길이/순서의 한국어 번역 배열을 반환하는 translateSegments 함수.
  */
@@ -740,6 +748,7 @@ export function createTranslator({
   tokenParam = "max_completion_tokens",
   reasoningParam = null,
   extraBody = null,
+  cacheSystemPrompt = false,
 }) {
   /**
    * 텍스트 세그먼트 배열을 한국어로 번역함.
@@ -785,6 +794,16 @@ export function createTranslator({
     segments.forEach((seg, i) => {
       segmentsObj[i] = seg;
     });
+    // 시스템 프롬프트는 재시도 간 동일하므로 한 번만 구성함.
+    const systemPrompt = buildSystemPrompt({ tone, glossary });
+    // 명시적 프롬프트 캐싱을 지원하는 프로바이더(OpenRouter 경유 Anthropic/Gemini/Qwen 등)는
+    // 시스템 프롬프트를 content 배열의 cache_control 브레이크포인트로 표시해 캐싱을 활성화함.
+    // 시스템 프롬프트는 배치마다 동일하므로 두 번째 요청부터 캐시 히트가 기대됨(입력 토큰
+    // 처리 비용/지연 절감). OpenRouter 는 캐싱 미지원 모델로 라우팅되면 이 마커를 자동
+    // 무시하므로 항상 붙여도 안전함. OpenAI 직접 호출은 자동(암묵적) 캐싱이라 문자열로 전송함.
+    const systemContent = cacheSystemPrompt
+      ? [{ type: "text", text: systemPrompt, cache_control: { type: "ephemeral" } }]
+      : systemPrompt;
     // 요청 본문을 구성함.
     // - useResponseFormat=false 이면 response_format 을 생략함(json_object 미지원 모델 대비).
     //   프롬프트가 이미 JSON 을 강하게 지시하므로 강제 필드가 없어도 대개 유효한 JSON 을 반환함.
@@ -799,7 +818,7 @@ export function createTranslator({
         ...(providerExtra || {}),
         model,
         messages: [
-          { role: "system", content: buildSystemPrompt({ tone, glossary }) },
+          { role: "system", content: systemContent },
           { role: "user", content: JSON.stringify({ segments: segmentsObj }) },
         ],
         ...(useResponseFormat ? { response_format: { type: "json_object" } } : {}),

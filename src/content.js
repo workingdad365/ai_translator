@@ -16,6 +16,7 @@
   const SKIP_TAGS = new Set([
     "SCRIPT", "STYLE", "NOSCRIPT", "TEXTAREA", "CODE", "PRE",
     "KBD", "SAMP", "SVG", "MATH", "INPUT", "SELECT", "OPTION",
+    "FACEPLATE-SCREEN-READER-CONTENT",
   ]);
   const PROTECTED_TAGS = new Set([
     "SCRIPT", "STYLE", "NOSCRIPT", "TEXTAREA", "PRE", "SVG", "MATH",
@@ -23,6 +24,8 @@
   ]);
   const PROTECTED_SELECTOR = [...PROTECTED_TAGS].map((tag) => tag.toLowerCase()).join(",");
   const PROTECTED_ATTR = "data-ai-translator-protected";
+  const OVERLAY_ATTR = "data-ai-translator-overlay";
+  const OVERLAY_STYLE_ATTR = "data-ai-translator-overlay-style";
   const SEMANTIC_BLOCK_TAGS = new Set([
     "P", "LI", "H1", "H2", "H3", "H4", "H5", "H6",
     "BLOCKQUOTE", "DT", "DD", "FIGCAPTION",
@@ -56,15 +59,25 @@
   // 한 번의 API 호출에 담을 최대 세그먼트(블록) 수 / 최대 문자 수(둘 다 설정으로 조정 가능).
   // 배치는 두 상한 중 먼저 도달하는 쪽에서 끊김. 문자 수는 블록 innerHTML 길이 기준.
   // 느린 모델은 배치를 작게 하면 배치당 응답이 빨라져 타임아웃 위험이 줄어듦.
-  const DEFAULT_BATCH_SIZE = 40;
-  const DEFAULT_MAX_CHARS = 3000;
+  const DEFAULT_BATCH_SIZE = 30;
+  const DEFAULT_MAX_CHARS = 5000;
   let maxSegmentsPerBatch = DEFAULT_BATCH_SIZE;
   let maxCharsPerBatch = DEFAULT_MAX_CHARS;
+
+  // 한 번의 플러시에서 동시에 진행할 배치(=API 왕복) 수 상한.
+  // 배치 간에는 데이터 의존성이 없으므로(블록별 독립 치환), 상한만큼 요청을 동시에
+  // 띄워 총 소요 시간을 "왕복 지연의 누적"이 아닌 "가장 느린 왕복"에 가깝게 줄임.
+  // 너무 크게 잡으면 레이트리밋(429)을 유발하므로 프로바이더 백오프와 함께 상한을 둠.
+  const DEFAULT_CONCURRENCY = 3;
+  let maxConcurrentBatches = DEFAULT_CONCURRENCY;
 
   // 스캔/플러시 디바운스 지연(ms).
   const DEBOUNCE_MS = 250;
 
   const translatedBlocks = new WeakSet(); // 번역 완료된 블록 요소
+  const appliedBlockStates = new WeakMap(); // 적용 HTML과 재렌더 복구 상태
+  const overlayTranslationCache = new Map(); // Reddit 소유 DOM 재생성 시 재사용할 번역문
+  let failedBlocks = new Set(); // 최종적으로 화면 적용에 실패한 블록
   const queuedBlocks = new WeakSet(); // 큐에 이미 담긴 블록 요소(중복 방지)
   let observedEls = new WeakSet(); // IntersectionObserver 로 관찰 중인 블록(세션 중지 시 교체)
   let mutationRoots = new WeakSet(); // MutationObserver 로 감시 중인 문서/ShadowRoot
@@ -73,6 +86,12 @@
 
   let active = false; // 번역 세션 활성 여부
   let flushing = false; // 플러시 진행 중 여부(동시 실행 방지)
+  // 병렬 배치의 진행 상황 집계용 상태. 여러 배치가 동시에 진행되므로 개별 배치가
+  // 각자 토스트를 덮어쓰지 않고, "진행 중 요청 수 / 완료 블록 수"를 하나로 갱신함.
+  let inFlightBatches = 0; // 현재 진행 중인 번역 요청(배치) 수
+  let pendingReapplies = 0; // 페이지 재렌더 후 번역문 재적용 대기 수
+  let translatedBlockCount = 0; // 현재 세션에서 완료된 블록 수(표시용)
+  let failedBlockCount = 0; // 현재 세션에서 화면 적용에 실패한 블록 수
   let io = null; // IntersectionObserver
   let mo = null; // MutationObserver
   let scanTimer = null;
@@ -98,13 +117,24 @@
     if (Number.isInteger(n) && n >= 500 && n <= 20000) maxCharsPerBatch = n;
   }
 
+  /**
+   * 동시 실행 배치 수 후보값을 검증해 유효하면 적용함(1~10 범위의 정수).
+   *
+   * @param {*} value - 저장소에서 읽은 concurrency 값.
+   */
+  function applyConcurrency(value) {
+    const n = Number(value);
+    if (Number.isInteger(n) && n >= 1 && n <= 10) maxConcurrentBatches = n;
+  }
+
   // 디버그 로그 / 배치 크기 / 문자 수 캡. 저장소에서 읽고, 팝업에서 변경되면 실시간 반영함.
   let debug = false;
-  chrome.storage.local.get(["debug", "batchSize", "maxChars"]).then(
-    ({ debug: d, batchSize, maxChars }) => {
+  chrome.storage.local.get(["debug", "batchSize", "maxChars", "concurrency"]).then(
+    ({ debug: d, batchSize, maxChars, concurrency }) => {
       debug = Boolean(d);
       applyBatchSize(batchSize);
       applyMaxChars(maxChars);
+      applyConcurrency(concurrency);
     },
   );
   chrome.storage.onChanged.addListener((changes, area) => {
@@ -112,6 +142,7 @@
     if (changes.debug) debug = Boolean(changes.debug.newValue);
     if (changes.batchSize) applyBatchSize(changes.batchSize.newValue);
     if (changes.maxChars) applyMaxChars(changes.maxChars.newValue);
+    if (changes.concurrency) applyConcurrency(changes.concurrency.newValue);
   });
 
   /**
@@ -198,7 +229,7 @@
   function observeMutationRoot(root) {
     if (!mo || mutationRoots.has(root)) return;
     mutationRoots.add(root);
-    mo.observe(root, { childList: true, subtree: true });
+    mo.observe(root, { childList: true, characterData: true, subtree: true });
   }
 
   /**
@@ -245,13 +276,51 @@
     const blocks = new Set();
     collectBlocks(document.body, blocks);
 
+    let hasEagerBlocks = false;
     for (const el of blocks) {
       if (!isTranslatableBlock(el)) continue;
+      if (isStableOverlayTarget(el)) {
+        const sourceText = normalizeBlockText(el.textContent);
+        const cachedTranslation = overlayTranslationCache.get(sourceText);
+        if (cachedTranslation && applyTranslationOverlay(el, cachedTranslation)) {
+          translatedBlocks.add(el);
+          appliedBlockStates.set(el, createAppliedState(el, sourceText, cachedTranslation, true));
+          translatedBlockCount++;
+          continue;
+        }
+        if (el.matches("#description.i18n-subreddit-description")) {
+          queuedBlocks.add(el);
+          pendingBlocks.add(el);
+          hasEagerBlocks = true;
+          continue;
+        }
+      }
+      if (isNearViewport(el)) {
+        queuedBlocks.add(el);
+        pendingBlocks.add(el);
+        hasEagerBlocks = true;
+        continue;
+      }
       if (!observedEls.has(el)) {
         observedEls.add(el);
         io.observe(el);
       }
     }
+    if (hasEagerBlocks) scheduleFlush();
+  }
+
+  /**
+   * 현재 뷰포트 또는 observer 여유 영역 안에 있는 요소인지 판별함.
+   * 초기 화면 블록은 IntersectionObserver 비동기 콜백 전에 페이지가 교체할 수 있으므로
+   * 스캔 시 바로 큐에 넣어 첫 포스트 누락을 방지함.
+   *
+   * @param {Element} el - 확인할 블록.
+   * @returns {boolean} 즉시 번역할 화면 인접 블록이면 true.
+   */
+  function isNearViewport(el) {
+    const rect = el.getBoundingClientRect();
+    const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
+    return rect.width > 1 && rect.height > 1 && rect.bottom > -200 && rect.top < viewportHeight + 200;
   }
 
   /**
@@ -286,6 +355,322 @@
   }
 
   /**
+   * 페이지 프레임워크가 번역된 블록을 다시 렌더링했으면 완료 상태를 해제함.
+   * 번역기 자신의 replaceChildren 변경은 기록한 HTML과 일치하므로 무시됨.
+   *
+   * @param {MutationRecord[]} mutations - DOM 변경 목록.
+   */
+  function handleMutations(mutations) {
+    for (const mutation of mutations) {
+      let el = mutation.target instanceof Element
+        ? mutation.target
+        : mutation.target.parentElement;
+
+      while (el) {
+        const state = appliedBlockStates.get(el);
+        if (state) {
+          if (state.overlay) {
+            state.html = el.innerHTML;
+            break;
+          }
+          if (el.innerHTML !== state.html && !state.timer) {
+            state.reapplyCount++;
+            if (state.reapplyCount > 3) {
+              if (state.counted) {
+                translatedBlockCount--;
+                state.counted = false;
+              }
+              const overlayTarget = resolveAppliedBlock(el, state);
+              if (!overlayTarget) {
+                appliedBlockStates.delete(el);
+                markBlockApplied(el);
+                log("content/handleMutations", "replaced dynamic block disappeared; ignoring", {
+                  tagName: el.tagName,
+                  id: el.id,
+                  sourceText: state.sourceText,
+                });
+                renderProgress();
+                break;
+              }
+              const translatedText = state.translatedText;
+              state.html = overlayTarget.innerHTML;
+              if (applyTranslationOverlay(overlayTarget, translatedText)) {
+                state.overlay = true;
+                state.counted = true;
+                translatedBlockCount++;
+                translatedBlocks.add(overlayTarget);
+                markBlockApplied(overlayTarget);
+                log("content/handleMutations", "translated block repeatedly replaced; using overlay", {
+                  tagName: overlayTarget.tagName,
+                  id: overlayTarget.id,
+                });
+                renderProgress();
+              } else {
+                markBlockFailed(overlayTarget);
+                showToast("일부 번역을 화면에 적용하지 못했습니다.", "error");
+                logError("content/handleMutations", "translated block was repeatedly replaced; overlay failed", {
+                  tagName: overlayTarget.tagName,
+                  id: overlayTarget.id,
+                  connected: overlayTarget.isConnected,
+                  hasTranslatedText: Boolean(translatedText.trim()),
+                  rootType: overlayTarget.getRootNode().constructor.name,
+                });
+              }
+              break;
+            }
+
+            if (state.counted) {
+              translatedBlockCount--;
+              state.counted = false;
+            }
+            pendingReapplies++;
+            const delay = DEBOUNCE_MS * state.reapplyCount;
+            state.timer = setTimeout(() => {
+              state.timer = null;
+              pendingReapplies--;
+              const currentEl = resolveAppliedBlock(el, state);
+              if (currentEl && currentEl.innerHTML !== state.html) {
+                const template = document.createElement("template");
+                template.innerHTML = state.html;
+                currentEl.replaceChildren(template.content);
+                state.html = currentEl.innerHTML;
+              }
+              if (currentEl && !state.counted) {
+                translatedBlockCount++;
+                state.counted = true;
+              }
+              log("content/handleMutations", "reapplied cached translation after page render", {
+                tagName: currentEl?.tagName || el.tagName,
+                id: currentEl?.id || el.id,
+                reapplyCount: state.reapplyCount,
+                targetFound: Boolean(currentEl),
+              });
+              renderProgress();
+            }, delay);
+            log("content/handleMutations", "translated block was replaced; scheduling cached reapply", {
+              tagName: el.tagName,
+              id: el.id,
+              reapplyCount: state.reapplyCount,
+              delay,
+            });
+            renderProgress();
+          }
+          break;
+        }
+
+        if (el.parentElement) {
+          el = el.parentElement;
+        } else {
+          const root = el.getRootNode();
+          el = root instanceof ShadowRoot ? root.host : null;
+        }
+      }
+    }
+    scheduleScan();
+  }
+
+  /** @param {Element} el - 화면 적용에 실패한 블록. */
+  function markBlockFailed(el) {
+    if (failedBlocks.has(el)) return;
+    failedBlocks.add(el);
+    failedBlockCount++;
+  }
+
+  /** @param {Element} el - 화면 적용에 성공한 블록. */
+  function markBlockApplied(el) {
+    if (failedBlocks.delete(el)) failedBlockCount--;
+  }
+
+  /**
+   * Reddit이 직접 다시 그리는 본문 계열 요소인지 판별함.
+   *
+   * @param {Element} el - 판별할 번역 블록.
+   * @returns {boolean} DOM 치환 대신 오버레이를 바로 사용해야 하면 true.
+   */
+  function isStableOverlayTarget(el) {
+    if (!/(^|\.)reddit\.com$/i.test(location.hostname)) return false;
+    return (
+      el.matches("#description.i18n-subreddit-description") ||
+      el.matches('[id^="post-title-"]') ||
+      Boolean(el.closest('[id$="-post-rtjson-content"], [property="schema:articleBody"]'))
+    );
+  }
+
+  /**
+   * 적용 후 재렌더 감시에 사용할 상태를 생성함.
+   *
+   * @param {Element} el - 적용 대상.
+   * @param {string} sourceText - 정규화한 원문.
+   * @param {string} translatedText - 정규화한 번역문.
+   * @param {boolean} overlay - 오버레이 적용 여부.
+   * @returns {object} 적용 상태.
+   */
+  function createAppliedState(el, sourceText, translatedText, overlay) {
+    return {
+      html: el.innerHTML,
+      translatedText,
+      sourceText,
+      root: el.getRootNode(),
+      href: el.tagName === "A" ? el.getAttribute("href") : null,
+      reapplyCount: 0,
+      timer: null,
+      counted: true,
+      overlay,
+    };
+  }
+
+  /** 현재 화면과 무관해진 동적 요소를 실패 집계에서 제거함. */
+  function pruneFailedBlocks() {
+    for (const el of failedBlocks) {
+      const style = el.isConnected ? getComputedStyle(el) : null;
+      if (
+        !el.isConnected ||
+        !normalizeBlockText(el.textContent) ||
+        style.display === "none" ||
+        style.visibility === "hidden"
+      ) {
+        failedBlocks.delete(el);
+        failedBlockCount--;
+      }
+    }
+  }
+
+  /**
+   * 번역 적용 후 요소 자체가 교체되면 현재 대응 요소로 상태를 이전함.
+   *
+   * @param {Element} el - 기존 적용 대상.
+   * @param {{sourceText: string, root: Document|ShadowRoot, href: string|null}} state - 적용 상태.
+   * @returns {Element|null} 현재 연결된 요소 또는 이미 사라졌으면 null.
+   */
+  function resolveAppliedBlock(el, state) {
+    if (el.isConnected) return el;
+    const block = {
+      el,
+      sourceText: state.sourceText,
+      root: state.root,
+      href: state.href,
+    };
+    const target = resolveCurrentBlock(block);
+    if (!target) return null;
+
+    appliedBlockStates.delete(el);
+    appliedBlockStates.set(target, state);
+    state.root = target.getRootNode();
+    return target;
+  }
+
+  /**
+   * 프레임워크가 자식 DOM을 계속 복원하는 블록에 번역문을 CSS 생성 콘텐츠로 표시함.
+   * 원본 자식은 그대로 유지하여 React/Lit 등의 렌더러와 DOM 소유권이 충돌하지 않음.
+   *
+   * @param {Element} el - 번역을 표시할 원본 블록.
+  * @param {string} translatedText - 표시할 번역문.
+   * @returns {boolean} 오버레이를 적용했으면 true.
+   */
+  function applyTranslationOverlay(el, translatedText) {
+    translatedText = translatedText.trim();
+    if (!translatedText) return false;
+
+    const root = el.getRootNode();
+    if (!(root instanceof Document || root instanceof ShadowRoot)) return false;
+    if (!root.querySelector(`[${OVERLAY_STYLE_ATTR}]`)) {
+      const style = document.createElement("style");
+      style.setAttribute(OVERLAY_STYLE_ATTR, "");
+      style.textContent = `
+        [${OVERLAY_ATTR}] {
+          font-size: 0 !important;
+          line-height: 0 !important;
+        }
+        [${OVERLAY_ATTR}] > * {
+          display: none !important;
+        }
+        [${OVERLAY_ATTR}]::after {
+          content: attr(${OVERLAY_ATTR});
+          color: var(--ai-translator-overlay-color) !important;
+          display: inline;
+          font-family: var(--ai-translator-overlay-font-family) !important;
+          font-size: var(--ai-translator-overlay-font-size) !important;
+          font-style: var(--ai-translator-overlay-font-style) !important;
+          font-weight: var(--ai-translator-overlay-font-weight) !important;
+          letter-spacing: var(--ai-translator-overlay-letter-spacing) !important;
+          line-height: var(--ai-translator-overlay-line-height) !important;
+          white-space: pre-wrap;
+        }
+      `;
+      if (root instanceof Document) root.head.appendChild(style);
+      else root.appendChild(style);
+    }
+
+    const computed = getComputedStyle(el);
+    el.style.setProperty("--ai-translator-overlay-color", computed.color);
+    el.style.setProperty("--ai-translator-overlay-font-family", computed.fontFamily);
+    el.style.setProperty("--ai-translator-overlay-font-size", computed.fontSize);
+    el.style.setProperty("--ai-translator-overlay-font-style", computed.fontStyle);
+    el.style.setProperty("--ai-translator-overlay-font-weight", computed.fontWeight);
+    el.style.setProperty("--ai-translator-overlay-letter-spacing", computed.letterSpacing);
+    el.style.setProperty("--ai-translator-overlay-line-height", computed.lineHeight);
+    el.setAttribute(OVERLAY_ATTR, translatedText);
+    return true;
+  }
+
+  /**
+   * 배치 목록을 동시 실행 상한 내에서 병렬로 번역함.
+   *
+   * 배치들은 서로 독립적으로 각 블록을 치환하고 응답도 인덱스 키로 정렬되므로,
+   * 순서에 관계없이 동시에 처리해도 안전함. maxConcurrentBatches 개의 워커가
+   * 공유 커서에서 다음 배치를 하나씩 가져가 처리하여, 한 배치의 왕복 지연이
+   * 다음 배치를 막지 않도록 함.
+   *
+   * @param {Array<Array<{el: Element, html: string, protectedNodes: Element[], protectedId: string}>>} batches
+   *   translateBatch 로 처리할 배치들의 배열.
+   * @returns {Promise<void>} 모든 배치 처리가 끝나면 해소됨.
+   */
+  async function runBatchesConcurrently(batches) {
+    let cursor = 0;
+    const worker = async () => {
+      while (active && cursor < batches.length) {
+        const batch = batches[cursor++];
+        await translateBatch(batch);
+      }
+    };
+    const workerCount = Math.min(maxConcurrentBatches, batches.length);
+    const workers = [];
+    for (let i = 0; i < workerCount; i++) workers.push(worker());
+    await Promise.all(workers);
+  }
+
+  /**
+   * 블록 배열을 화면 표시 우선순위로 제자리 정렬함.
+   *
+   * 지금 뷰포트 안에 실제로 보이는 블록을 앞쪽에, 각 그룹 내에서는 화면 위→아래
+   * (top 오름차순)로 배치하여, 사용자가 보고 있는 영역이 가장 먼저 번역되도록 함.
+   * 병렬 워커가 커서 앞쪽부터 배치를 집으므로, 이 정렬만으로 동시 실행 상한만큼
+   * 화면 상단 영역이 우선 처리됨. getBoundingClientRect 는 리플로우를 유발하므로
+   * 블록당 한 번만 읽어 캐시함(정렬 비교 중 재측정 방지).
+   *
+   * @param {Element[]} blocks - 정렬할 블록 요소 배열(제자리 변경됨).
+   */
+  function sortByViewportPriority(blocks) {
+    const viewportHeight =
+      window.innerHeight || document.documentElement.clientHeight || 0;
+    const metrics = new Map();
+    for (const el of blocks) {
+      const rect = el.getBoundingClientRect();
+      metrics.set(el, {
+        visible: rect.bottom > 0 && rect.top < viewportHeight,
+        top: rect.top,
+      });
+    }
+    blocks.sort((a, b) => {
+      const ma = metrics.get(a);
+      const mb = metrics.get(b);
+      // 보이는 블록을 먼저(그룹 우선), 같은 그룹 안에서는 화면 위→아래 순.
+      if (ma.visible !== mb.visible) return ma.visible ? -1 : 1;
+      return ma.top - mb.top;
+    });
+  }
+
+  /**
    * 대기 중인 블록을 배치로 나누어 번역 요청 후 결과로 치환함.
    */
   async function flush() {
@@ -295,12 +680,11 @@
     try {
       const blocks = [...pendingBlocks];
       pendingBlocks.clear();
+      // 화면에 보이는 영역을 먼저 번역하도록 표시 우선순위로 정렬함(체감 속도 개선).
+      sortByViewportPriority(blocks);
       const preparedBlocks = blocks.map(prepareBlock).filter(Boolean);
 
-      for (const batch of makeBatches(preparedBlocks)) {
-        if (!active) break;
-        await translateBatch(batch);
-      }
+      await runBatchesConcurrently(makeBatches(preparedBlocks));
     } finally {
       flushing = false;
       // 플러시 중 새로 쌓인 대기 블록이 있으면 이어서 처리함.
@@ -366,7 +750,63 @@
       translatedBlocks.add(el);
       return null;
     }
-    return { el, html: clone.innerHTML, protectedNodes, protectedId };
+    return {
+      el,
+      html: clone.innerHTML,
+      sourceText: normalizeBlockText(el.textContent),
+      root: el.getRootNode(),
+      href: el.tagName === "A" ? el.getAttribute("href") : null,
+      protectedNodes,
+      protectedId,
+    };
+  }
+
+  /** @param {string|null} text - 비교할 블록 텍스트. */
+  function normalizeBlockText(text) {
+    return (text || "").replace(/\s+/g, " ").trim();
+  }
+
+  /**
+   * 요청 중 페이지가 원래 요소를 교체한 경우 같은 루트에서 현재 블록을 다시 찾음.
+   *
+   * @param {{el: Element, sourceText: string, root: Document|ShadowRoot}} block - 준비된 블록.
+   * @returns {Element|null} 현재 문서에 연결된 대응 요소.
+   */
+  function resolveCurrentBlock(block) {
+    if (block.el.isConnected) return block.el;
+    const roots = [];
+    if (block.root instanceof Document || block.root instanceof ShadowRoot) roots.push(block.root);
+    if (block.root !== document) roots.push(document);
+
+    const visitedRoots = new Set();
+    while (roots.length > 0) {
+      const root = roots.shift();
+      if (visitedRoots.has(root)) continue;
+      visitedRoots.add(root);
+
+      const candidates = root.querySelectorAll(block.el.tagName.toLowerCase());
+      for (const candidate of candidates) {
+        if (
+          candidate.isConnected &&
+          normalizeBlockText(candidate.textContent) === block.sourceText &&
+          (!block.href || candidate.getAttribute("href") === block.href) &&
+          isLeafBlock(candidate)
+        ) {
+          block.el = candidate;
+          block.root = candidate.getRootNode();
+          log("content/resolveCurrentBlock", "reconnected replaced translation target", {
+            tagName: candidate.tagName,
+            id: candidate.id,
+            sourceText: block.sourceText,
+          });
+          return candidate;
+        }
+      }
+      for (const el of root.querySelectorAll("*")) {
+        if (el.shadowRoot) roots.push(el.shadowRoot);
+      }
+    }
+    return null;
   }
 
   /**
@@ -432,6 +872,34 @@
   }
 
   /**
+   * 병렬 배치의 진행 상황을 하나의 집계 토스트로 표시함.
+   * 여러 배치가 동시에 진행되므로 개별 배치가 각자 토스트를 덮어쓰지 않고,
+   * 진행 중 요청 수와 누적 완료 블록 수를 함께 갱신함. 오류 토스트가 떠 있으면
+   * (lastToastKind === "error") 진단을 놓치지 않도록 덮어쓰지 않음.
+   */
+  function renderProgress() {
+    if (lastToastKind === "error" && !active) return;
+    pruneFailedBlocks();
+    if (inFlightBatches > 0 || pendingReapplies > 0) {
+      showToast(
+        `번역 중… 요청 ${inFlightBatches}개, 화면 적용 ${pendingReapplies}개 대기, ` +
+          `${translatedBlockCount.toLocaleString()}개 블록 완료`,
+        "progress",
+      );
+    } else if (translatedBlockCount > 0 || failedBlockCount > 0) {
+      if (failedBlockCount > 0) {
+        showToast(
+          `번역 미완료: ${translatedBlockCount.toLocaleString()}개 적용, ` +
+            `${failedBlockCount.toLocaleString()}개 미적용`,
+          "error",
+        );
+      } else {
+        showToast(`번역 완료 (${translatedBlockCount.toLocaleString()}개 블록)`, "info");
+      }
+    }
+  }
+
+  /**
    * 단일 배치를 백그라운드로 보내 번역하고, 응답을 블록 innerHTML 로 반영함.
    *
    * @param {Array<{el: Element, html: string, protectedNodes: Element[], protectedId: string}>} blocks
@@ -442,92 +910,142 @@
   async function translateBatch(blocks, retryMissing = true, isRetry = false) {
     // 제외 태그 하위 트리가 플레이스홀더로 축약된 HTML을 전송함.
     const segments = blocks.map((block) => block.html);
-    const charCount = segments.reduce((total, segment) => total + segment.length, 0);
     const startedAt = performance.now();
     log("content/translateBatch", `sending ${segments.length} segments`, segments);
-    showToast(
-      `${isRetry ? "누락 번역 재시도 중" : "번역 요청 중"}: ` +
-        `${segments.length.toLocaleString()}개 블록, ` +
-        `${charCount.toLocaleString()}자`,
-      "progress",
-    );
 
-    let resp;
+    // 최상위 호출만 진행 카운트에 반영함(누락 세그먼트 재요청은 같은 배치의 연장).
+    if (!isRetry) inFlightBatches++;
+    renderProgress();
+
     try {
-      resp = await chrome.runtime.sendMessage({ type: "translate-batch", segments });
-    } catch (err) {
-      // 서비스 워커 미응답 등
-      const elapsedSec = ((performance.now() - startedAt) / 1000).toFixed(1);
-      logError("content/translateBatch", `sendMessage failed: ${err.message}`);
-      showToast(`번역 오류 (${elapsedSec}초): ${err.message}`, "error");
-      return;
-    }
-
-    const elapsedSec = ((performance.now() - startedAt) / 1000).toFixed(1);
-    if (!resp || resp.error) {
-      const reason = resp?.error ?? "알 수 없는 오류(서비스 워커 무응답)";
-      logError("content/translateBatch", `provider error: ${reason}`, { segments });
-      if (resp?.errorCode === "timeout" && resp.requestStats) {
-        const { segmentCount, charCount, timeoutMs } = resp.requestStats;
-        showToast(
-          `요청 시간 초과 (${elapsedSec}초): ${segmentCount.toLocaleString()}개 블록, ` +
-            `${charCount.toLocaleString()}자 전송, 제한 ${Math.round(timeoutMs / 1000)}초`,
-          "error",
-        );
-      } else {
-        showToast(`번역 오류 (${elapsedSec}초): ${reason}`, "error");
-      }
-      // 오류가 발생하면 세션을 멈춰 반복 실패/과금을 방지함.
-      stopTranslation();
-      return;
-    }
-
-    const { translations } = resp;
-    if (!Array.isArray(translations) || translations.length !== blocks.length) {
-      // 개수 불일치는 세션을 멈추지 않고 이 배치만 건너뜀(다음 배치는 정상일 수 있음).
-      logError(
-        "content/translateBatch",
-        `bad response shape: expected ${blocks.length}, got ${
-          Array.isArray(translations) ? translations.length : typeof translations
-        }`,
-        { segments, translations },
-      );
-      showToast("번역 응답 형식이 올바르지 않습니다(이 부분은 건너뜁니다).", "error");
-      return;
-    }
-
-    const missingIndexSet = new Set(resp.missingIndices || []);
-    const missingBlocks = [];
-    blocks.forEach((block, i) => {
-      const html = translations[i];
-      if (retryMissing && missingIndexSet.has(i)) {
-        missingBlocks.push(block);
+      let resp;
+      try {
+        resp = await chrome.runtime.sendMessage({ type: "translate-batch", segments });
+      } catch (err) {
+        // 서비스 워커 미응답 등
+        const elapsedSec = ((performance.now() - startedAt) / 1000).toFixed(1);
+        logError("content/translateBatch", `sendMessage failed: ${err.message}`);
+        showToast(`번역 오류 (${elapsedSec}초): ${err.message}`, "error");
         return;
       }
-      // 비어 있거나 문자열이 아닌 응답은 원문 유지(병합/누락 아티팩트 방어).
-      if (typeof html === "string" && html.trim() !== "") {
-        const restored = restoreProtectedHtml(html, block.protectedNodes, block.protectedId);
-        if (restored) {
-          block.el.replaceChildren(restored);
+
+      const elapsedSec = ((performance.now() - startedAt) / 1000).toFixed(1);
+      if (!resp || resp.error) {
+        const reason = resp?.error ?? "알 수 없는 오류(서비스 워커 무응답)";
+        logError("content/translateBatch", `provider error: ${reason}`, { segments });
+        if (resp?.errorCode === "timeout" && resp.requestStats) {
+          const { segmentCount, charCount, timeoutMs } = resp.requestStats;
+          showToast(
+            `요청 시간 초과 (${elapsedSec}초): ${segmentCount.toLocaleString()}개 블록, ` +
+              `${charCount.toLocaleString()}자 전송, 제한 ${Math.round(timeoutMs / 1000)}초`,
+            "error",
+          );
         } else {
-          logError("content/translateBatch", "protected placeholders were altered; keeping original", {
-            segment: block.html,
-            translation: html,
-          });
+          showToast(`번역 오류 (${elapsedSec}초): ${reason}`, "error");
+        }
+        // 오류가 발생하면 세션을 멈춰 반복 실패/과금을 방지함.
+        stopTranslation();
+        return;
+      }
+
+      const { translations } = resp;
+      if (!Array.isArray(translations) || translations.length !== blocks.length) {
+        // 개수 불일치는 세션을 멈추지 않고 이 배치만 건너뜀(다음 배치는 정상일 수 있음).
+        logError(
+          "content/translateBatch",
+          `bad response shape: expected ${blocks.length}, got ${
+            Array.isArray(translations) ? translations.length : typeof translations
+          }`,
+          { segments, translations },
+        );
+        blocks.forEach((block) => markBlockFailed(block.el));
+        showToast("번역 응답 형식이 올바르지 않습니다(이 부분은 건너뜁니다).", "error");
+        return;
+      }
+
+      const missingIndexSet = new Set(resp.missingIndices || []);
+      const missingBlocks = [];
+      blocks.forEach((block, i) => {
+        const html = translations[i];
+        if (missingIndexSet.has(i)) {
+          if (retryMissing) missingBlocks.push(block);
+          else {
+            queuedBlocks.delete(block.el);
+            markBlockFailed(block.el);
+          }
+          return;
+        }
+        // 비어 있거나 문자열이 아닌 응답은 원문 유지(병합/누락 아티팩트 방어).
+        if (typeof html === "string" && html.trim() !== "") {
+          const target = resolveCurrentBlock(block);
+          const restored = restoreProtectedHtml(html, block.protectedNodes, block.protectedId);
+          if (restored && target) {
+            const translatedText = normalizeBlockText(restored.textContent);
+            if (
+              block.protectedNodes.length === 0 &&
+              translatedText &&
+              isStableOverlayTarget(target)
+            ) {
+              if (!applyTranslationOverlay(target, translatedText)) {
+                queuedBlocks.delete(block.el);
+                markBlockFailed(block.el);
+                return;
+              }
+              overlayTranslationCache.set(block.sourceText, translatedText);
+              appliedBlockStates.set(
+                target,
+                createAppliedState(target, block.sourceText, translatedText, true),
+              );
+            } else {
+              target.replaceChildren(restored);
+              if (block.protectedNodes.length === 0 && translatedText) {
+                appliedBlockStates.set(
+                  target,
+                  createAppliedState(target, block.sourceText, translatedText, false),
+                );
+              }
+            }
+          } else {
+            logError("content/translateBatch", "translation target or placeholders are invalid; keeping original", {
+              targetFound: Boolean(target),
+              placeholdersValid: Boolean(restored),
+              sourceText: block.sourceText,
+              segment: block.html,
+              translation: html,
+            });
+            queuedBlocks.delete(block.el);
+            markBlockFailed(block.el);
+            return;
+          }
+        } else {
+          queuedBlocks.delete(block.el);
+          markBlockFailed(block.el);
+          return;
+        }
+        markBlockApplied(block.el);
+        translatedBlocks.add(block.el);
+        translatedBlockCount++;
+      });
+
+      log("content/translateBatch", `applied ${translations.length} translations`);
+      if (missingBlocks.length > 0 && active) {
+        log(
+          "content/translateBatch",
+          `retrying ${missingBlocks.length} missing translation segments individually`,
+        );
+        for (const block of missingBlocks) {
+          if (!active) break;
+          await translateBatch([block], false, true);
         }
       }
-      translatedBlocks.add(block.el);
-    });
-
-    log("content/translateBatch", `applied ${translations.length} translations`);
-    if (missingBlocks.length > 0 && active) {
-      log(
-        "content/translateBatch",
-        `retrying ${missingBlocks.length} missing translation segments once`,
-      );
-      await translateBatch(missingBlocks, false, true);
+    } finally {
+      // 최상위 호출이 끝나면 진행 카운트를 줄이고 집계 토스트를 갱신함
+      // (성공·건너뜀·비종료 오류 모두 포함).
+      if (!isRetry) {
+        inFlightBatches--;
+        renderProgress();
+      }
     }
-    showToast(`현재 영역 번역 완료 (${elapsedSec}초)`, "info");
   }
 
   /** 번역 세션을 시작함. 관찰자/스캔을 초기화하고 첫 스캔을 수행함. */
@@ -538,13 +1056,20 @@
       return;
     }
     active = true;
+    // 새 세션 시작 시 진행 집계와 토스트 상태를 초기화함.
+    inFlightBatches = 0;
+    pendingReapplies = 0;
+    translatedBlockCount = 0;
+    failedBlockCount = 0;
+    failedBlocks = new Set();
+    lastToastKind = null;
 
     io = new IntersectionObserver(onIntersect, { rootMargin: "200px 0px" });
 
     // 동적 콘텐츠(무한 스크롤 등)로 노드가 추가되면 재스캔.
     // 번역 결과 innerHTML 교체도 childList 변경을 유발하지만, 해당 블록은 이미
     // translatedBlocks 에 있어 재수집되지 않으므로 무한 루프가 생기지 않음.
-    mo = new MutationObserver(() => scheduleScan());
+    mo = new MutationObserver(handleMutations);
     mutationRoots = new WeakSet();
     observeMutationRoot(document);
 
@@ -569,6 +1094,7 @@
   // ── 화면 우하단 상태 토스트 ─────────────────────────────────────────────
   let toastEl = null;
   let toastTimer = null;
+  let lastToastKind = null; // 마지막으로 표시한 토스트 종류(진행 토스트가 오류를 덮지 않도록 보존)
 
   /**
    * 페이지 우하단에 상태 메시지를 표시함.
@@ -603,6 +1129,7 @@
       document.documentElement.appendChild(toastEl);
     }
 
+    lastToastKind = kind;
     const isError = kind === "error";
     const isProgress = kind === "progress";
     toastEl.textContent = isError ? `${text} (클릭하여 닫기)` : text;

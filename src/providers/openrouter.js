@@ -22,4 +22,8 @@ export const translateSegments = createTranslator({
   // 누락된 따옴표·괄호 등 일반적인 문법 오류를 우선 복구하도록 함.
   extraBody: ({ useResponseFormat }) =>
     useResponseFormat ? { plugins: [{ id: "response-healing" }] } : {},
+  // 시스템 프롬프트(말투·용어집 규칙)는 배치마다 동일하므로 cache_control 브레이크포인트로
+  // 캐싱함. OpenRouter 가 Anthropic/Gemini/Qwen 등 명시적 캐싱 프로바이더에는 프로바이더별
+  // 형식으로 변환하고, 자동 캐싱(OpenAI/DeepSeek) 또는 미지원 모델로 라우팅되면 무시함.
+  cacheSystemPrompt: true,
 });

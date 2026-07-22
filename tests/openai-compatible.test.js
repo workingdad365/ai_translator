@@ -147,6 +147,78 @@ test("OpenRouter JSON 요청에 응답 치유 플러그인을 포함한다", asy
   assert.deepEqual(requestBody.plugins, [{ id: "response-healing" }]);
 });
 
+test("OpenRouter 요청은 시스템 프롬프트에 프롬프트 캐싱 브레이크포인트를 붙인다", async () => {
+  const originalFetch = globalThis.fetch;
+  let requestBody;
+  globalThis.fetch = async (_url, options) => {
+    requestBody = JSON.parse(options.body);
+    return {
+      ok: true,
+      status: 200,
+      headers: { get: () => null },
+      text: async () => JSON.stringify({
+        choices: [{ finish_reason: "stop", message: { content: '{"translations":{"0":"홈"}}' } }],
+        model: "anthropic/claude-sonnet-5",
+        provider: "anthropic",
+      }),
+    };
+  };
+
+  try {
+    await openrouterTranslate({
+      apiKey: "test-key",
+      model: "anthropic/claude-sonnet-5",
+      segments: ["Home"],
+      reasoningEffort: "default",
+      timeoutMs: 1000,
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  const systemMessage = requestBody.messages[0];
+  assert.equal(systemMessage.role, "system");
+  assert.ok(Array.isArray(systemMessage.content));
+  assert.equal(systemMessage.content.at(-1).type, "text");
+  assert.deepEqual(systemMessage.content.at(-1).cache_control, { type: "ephemeral" });
+});
+
+test("캐싱을 켜지 않은 프로바이더는 시스템 프롬프트를 문자열로 전송한다", async () => {
+  const originalFetch = globalThis.fetch;
+  let requestBody;
+  globalThis.fetch = async (_url, options) => {
+    requestBody = JSON.parse(options.body);
+    return {
+      ok: true,
+      status: 200,
+      headers: { get: () => null },
+      text: async () => JSON.stringify({
+        choices: [{ finish_reason: "stop", message: { content: '{"translations":{"0":"홈"}}' } }],
+        model: "test/model",
+      }),
+    };
+  };
+
+  const translate = createTranslator({
+    endpoint: "https://example.test/chat/completions",
+    label: "Test",
+  });
+
+  try {
+    await translate({
+      apiKey: "test-key",
+      model: "test/model",
+      segments: ["Home"],
+      reasoningEffort: "default",
+      timeoutMs: 1000,
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  assert.equal(typeof requestBody.messages[0].content, "string");
+});
+
 test("LaoZhang AI 요청은 공식 백업 엔드포인트와 max_tokens를 사용한다", async () => {
   const originalFetch = globalThis.fetch;
   let requestUrl;
