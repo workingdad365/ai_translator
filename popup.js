@@ -1,10 +1,10 @@
 // 팝업 스크립트
-// 설정(프로바이더/API 키/모델)을 저장소와 동기화하고,
+// 설정(AI 서비스/API 키/모델)을 저장소와 동기화하고,
 // 활성 탭의 번역 상태에 따라 "이 페이지 번역" / "번역 중지" 버튼을 토글함.
 // - 번역을 시작하면 팝업을 즉시 닫음.
 // - 번역 중인 페이지에서 팝업을 다시 열면 "번역 중지" 버튼이 표시되고, 누르면 세션을 멈춤.
-// - API 키/모델은 프로바이더별로 개별 저장하므로, 프로바이더를 전환하면 해당
-//   프로바이더에 저장해 둔 값이 폼에 표시됨.
+// - API 키/모델은 AI 서비스별로 개별 저장하므로, 서비스를 전환하면 해당
+//   서비스에 저장해 둔 값이 폼에 표시됨.
 
 const DEFAULT_PROVIDER = "openai";
 const AVAILABLE_PROVIDERS = new Set(["openai", "openrouter", "gemini"]);
@@ -67,6 +67,8 @@ const els = {
   provider: document.getElementById("provider"),
   apiKey: document.getElementById("api-key"),
   model: document.getElementById("model"),
+  openrouterProviderField: document.getElementById("openrouter-provider-field"),
+  openrouterProvider: document.getElementById("openrouter-provider"),
   modelList: document.getElementById("model-list"),
   fetchModels: document.getElementById("fetch-models-button"),
   modelNotice: document.getElementById("model-notice"),
@@ -192,6 +194,8 @@ function fillCredentialFields(provider) {
   const cred = credentials[provider] || {};
   els.apiKey.value = cred.apiKey || "";
   els.model.value = cred.model || "";
+  els.openrouterProvider.value = provider === "openrouter" ? cred.providerSlug || "" : "";
+  els.openrouterProviderField.hidden = provider !== "openrouter";
 
   const meta = PROVIDER_META[provider] || PROVIDER_META[DEFAULT_PROVIDER];
   els.apiKey.placeholder = meta.apiKeyHint;
@@ -276,8 +280,12 @@ async function fetchModelOptions() {
 /** 현재 폼의 API 키/모델 입력값을 표시 중인 프로바이더 자격증명 캐시에 반영함. */
 function captureShownCredentials() {
   credentials[shownProvider] = {
+    ...(credentials[shownProvider] || {}),
     apiKey: els.apiKey.value.trim(),
     model: els.model.value.trim(),
+    ...(shownProvider === "openrouter"
+      ? { providerSlug: els.openrouterProvider.value.trim() }
+      : {}),
   };
 }
 
@@ -470,9 +478,14 @@ els.provider.addEventListener("change", () => {
 
 els.fetchModels.addEventListener("click", fetchModelOptions);
 
+els.openrouterProvider.addEventListener("input", () => {
+  els.openrouterProvider.value = els.openrouterProvider.value.toLowerCase();
+});
+
 for (const el of [
   els.apiKey,
   els.model,
+  els.openrouterProvider,
   els.glossary,
   els.tone,
   els.reasoningEffort,

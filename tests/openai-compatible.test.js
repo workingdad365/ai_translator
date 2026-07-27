@@ -147,6 +147,39 @@ test("OpenRouter JSON 요청에 응답 치유 플러그인을 포함한다", asy
   assert.deepEqual(requestBody.plugins, [{ id: "response-healing" }]);
 });
 
+test("OpenRouter 실행 제공자 slug를 소문자로 정규화해 provider.only로 제한한다", async () => {
+  const originalFetch = globalThis.fetch;
+  let requestBody;
+  globalThis.fetch = async (_url, options) => {
+    requestBody = JSON.parse(options.body);
+    return {
+      ok: true,
+      status: 200,
+      headers: { get: () => null },
+      text: async () => JSON.stringify({
+        choices: [{ finish_reason: "stop", message: { content: '{"translations":{"0":"홈"}}' } }],
+        model: "openai/gpt-oss-20b",
+        provider: "groq",
+      }),
+    };
+  };
+
+  try {
+    await openrouterTranslate({
+      apiKey: "test-key",
+      model: "openai/gpt-oss-20b",
+      providerSlug: " GroQ ",
+      segments: ["Home"],
+      reasoningEffort: "default",
+      timeoutMs: 1000,
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  assert.deepEqual(requestBody.provider, { only: ["groq"] });
+});
+
 test("OpenRouter 요청은 시스템 프롬프트에 프롬프트 캐싱 브레이크포인트를 붙인다", async () => {
   const originalFetch = globalThis.fetch;
   let requestBody;

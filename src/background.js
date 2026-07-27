@@ -28,7 +28,7 @@ const DEFAULT_PROVIDER = "openai";
  * 형태로 저장함. 과거 단일 형식(최상위 `apiKey`/`model`)으로 저장된 값은
  * openai 자격증명으로 간주하여 하위 호환함.
  *
- * @returns {Promise<{provider: string, apiKey: string, model: string, tone: string, glossary: string, reasoningEffort: string, timeoutMs: number, debug: boolean}>}
+ * @returns {Promise<{provider: string, apiKey: string, model: string, providerSlug: string, tone: string, glossary: string, reasoningEffort: string, timeoutMs: number, debug: boolean}>}
  *   선택된 프로바이더의 설정값. tone 은 "banmal"(기본), "jondaenmal", "casual",
  *   reasoningEffort 는 추론 강도("none" 기본 / "minimal" / "low" / "default"),
  *   timeoutMs 는 요청 타임아웃(ms, 기본 60000), debug 는 상세 로그 여부.
@@ -63,6 +63,7 @@ async function getSettings() {
     provider,
     apiKey,
     model,
+    providerSlug: provider === "openrouter" ? String(cred.providerSlug || "").trim() : "",
     tone: stored.tone || "banmal",
     glossary: stored.glossary || "",
     reasoningEffort: stored.reasoningEffort || "none",
@@ -79,8 +80,17 @@ async function getSettings() {
  * @returns {Promise<{translations?: string[], missingIndices?: number[], error?: string, errorCode?: string|null, requestStats?: {segmentCount: number, charCount: number, timeoutMs: number}}>} 번역 결과 또는 오류 정보.
  */
 async function handleTranslate(segments) {
-  const { provider, apiKey, model, tone, glossary, reasoningEffort, timeoutMs, debug } =
-    await getSettings();
+  const {
+    provider,
+    apiKey,
+    model,
+    providerSlug,
+    tone,
+    glossary,
+    reasoningEffort,
+    timeoutMs,
+    debug,
+  } = await getSettings();
 
   if (!apiKey) {
     return { error: "API 키가 설정되지 않았습니다. 확장 팝업에서 키를 입력하세요." };
@@ -106,6 +116,7 @@ async function handleTranslate(segments) {
     const translations = await translate({
       apiKey,
       model,
+      providerSlug,
       segments,
       tone,
       glossary,

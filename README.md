@@ -9,6 +9,7 @@
 - 무한 스크롤 등으로 DOM이 동적으로 추가되면 자동으로 감지해 번역함(`MutationObserver`).
 - 사용자가 **API 키**와 **모델명**을 직접 입력함(예: OpenAI `gpt-5.4-mini`, OpenRouter `deepseek/deepseek-v4-flash`, LaoZhang AI `gpt-4o-mini`, Gemini `gemini-3.1-flash-lite`).
 - **프로바이더별 자격증명 저장**: OpenAI/OpenRouter/LaoZhang AI/Gemini 각각의 API 키·모델을 따로 저장하며, 프로바이더를 전환하면 해당 프로바이더에 저장한 값이 자동으로 표시됨.
+- **OpenRouter 실행 제공자 지정**: OpenRouter 선택 시 모델을 실제로 호스팅하는 실행 제공자의 slug(예: `groq`, `deepinfra/turbo`)를 선택적으로 저장함. 지정하면 요청의 `provider.only`로 전달하여 해당 실행 제공자로 제한하고, 비워 두면 OpenRouter 자동 라우팅을 사용함.
 - **말투 선택**: 페이지 전체를 일관된 **반말(기사체)** 또는 **존댓말(합니다체)** 로 번역하거나, **캐주얼체(게시판)** 로 화자마다 다른 격식과 친밀도를 유지함. 캐주얼체는 Reddit 같은 일반 게시판에 맞춰 반말·해요체·합니다체·높은 존칭을 원문의 태도에 따라 선택하되, 과격한 커뮤니티 고유 말투나 불필요한 비속어를 만들지 않음.
 - **추론 강도 조정**: 추론(reasoning) 모델이 번역 전에 사고 과정을 길게 도는 것을 줄임. 없음(기본)/최소/낮음/모델 기본값 중 선택. 프로바이더별로 올바른 형식(OpenAI `reasoning_effort`, OpenRouter `reasoning` 객체, Gemini `generation_config.thinking_level`)만 전송함. LaoZhang AI는 공식 API 매뉴얼에 추론 파라미터가 명시되어 있지 않아 해당 설정을 전송하지 않음. Gemini에는 완전 비활성 값이 없어 `없음`을 `minimal`로 매핑하며, 모델이 거부하면 모델 기본값으로 자동 폴백함.
 - **용어집(고정 번역)**: 특정 고유명사·용어를 항상 지정한 번역으로 치환함(예: `Sam Altman=샘 올트먼`). 설정에 저장되어 재사용됨.

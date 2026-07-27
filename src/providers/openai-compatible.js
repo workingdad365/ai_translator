@@ -732,7 +732,7 @@ async function attemptTranslate({ endpoint, headers, bodyStr, label, debug, wher
  *   요청 본문 필드로 변환하는 함수. 프로바이더마다 형식이 달라 주입식으로 받음
  *   (OpenAI: `{reasoning_effort}`, OpenRouter: `{reasoning:{effort,exclude}}`).
  *   null 이면 추론 제어 파라미터를 보내지 않음.
- * @param {Record<string, *>|((context: {useResponseFormat: boolean, effort: string|null}) => Record<string, *>)} [config.extraBody]
+ * @param {Record<string, *>|((context: {useResponseFormat: boolean, effort: string|null, providerSlug: string}) => Record<string, *>)} [config.extraBody]
  *   프로바이더별 요청 본문 추가 필드 또는 생성 함수. 공통 필드는 덮어쓸 수 없음.
  * @param {boolean} [config.cacheSystemPrompt] - 시스템 프롬프트에 명시적 프롬프트 캐싱
  *   브레이크포인트(`cache_control`)를 붙일지 여부. OpenRouter 처럼 블록 단위 캐시 마커를
@@ -767,6 +767,7 @@ export function createTranslator({
   return async function translateSegments({
     apiKey,
     model,
+    providerSlug,
     segments,
     tone,
     glossary,
@@ -813,7 +814,9 @@ export function createTranslator({
       const reasoningExtra =
         effort && typeof reasoningParam === "function" ? reasoningParam(effort) : null;
       const providerExtra =
-        typeof extraBody === "function" ? extraBody({ useResponseFormat, effort }) : extraBody;
+        typeof extraBody === "function"
+          ? extraBody({ useResponseFormat, effort, providerSlug })
+          : extraBody;
       return JSON.stringify({
         ...(providerExtra || {}),
         model,

@@ -22,10 +22,10 @@
       <p id="notice" class="notice" role="status" aria-live="polite"></p>
 
       <details id="settings" class="settings">
-        <summary>설정 (프로바이더 · API 키 · 모델)</summary>
+        <summary>설정 (AI 서비스 · API 키 · 모델)</summary>
 
         <label class="field">
-          <span>프로바이더</span>
+          <span>AI 서비스</span>
           <select id="provider">
             <option value="openai">OpenAI</option>
             <option value="openrouter">OpenRouter</option>
@@ -51,6 +51,12 @@
           <datalist id="model-list"></datalist>
           <p id="model-notice" class="field-notice" role="status" aria-live="polite"></p>
         </div>
+
+        <label id="openrouter-provider-field" class="field" hidden>
+          <span>OpenRouter 실행 제공자 (Provider slug, 선택)</span>
+          <input id="openrouter-provider" type="text" autocomplete="off"
+                 spellcheck="false" placeholder="예: groq 또는 google-vertex/us-east5">
+        </label>
 
         <label class="field">
           <span>말투</span>
