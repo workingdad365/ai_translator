@@ -54,6 +54,7 @@ const STORAGE_DEFAULTS = {
   concurrency: DEFAULT_CONCURRENCY,
   timeoutSec: DEFAULT_TIMEOUT_SEC,
   debug: false,
+  showProgressToast: true,
   apiKey: "",
   model: "",
 };
@@ -80,6 +81,7 @@ const els = {
   concurrency: document.getElementById("concurrency"),
   timeoutSec: document.getElementById("timeout-sec"),
   debug: document.getElementById("debug"),
+  showProgressToast: document.getElementById("show-progress-toast"),
   translate: document.getElementById("translate-button"),
   save: document.getElementById("save-button"),
   settings: document.getElementById("settings"),
@@ -311,6 +313,7 @@ async function loadSettings() {
   els.concurrency.value = normalizeConcurrency(cfg.concurrency);
   els.timeoutSec.value = normalizeTimeoutSec(cfg.timeoutSec);
   els.debug.checked = Boolean(cfg.debug);
+  els.showProgressToast.checked = cfg.showProgressToast !== false;
 
   shownProvider = provider;
   fillCredentialFields(provider);
@@ -379,6 +382,7 @@ async function saveSettings(updateForm = true) {
     concurrency,
     timeoutSec,
     debug: els.debug.checked,
+    showProgressToast: els.showProgressToast.checked,
   });
 
   const cred = credentials[provider] || {};
@@ -494,6 +498,7 @@ for (const el of [
   els.concurrency,
   els.timeoutSec,
   els.debug,
+  els.showProgressToast,
 ]) {
   el.addEventListener("input", scheduleAutoSave);
 }

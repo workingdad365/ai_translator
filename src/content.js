@@ -127,11 +127,16 @@
     if (Number.isInteger(n) && n >= 1 && n <= 10) maxConcurrentBatches = n;
   }
 
-  // 디버그 로그 / 배치 크기 / 문자 수 캡. 저장소에서 읽고, 팝업에서 변경되면 실시간 반영함.
+  // 디버그 로그 / 진행 토스트 / 배치 크기 / 문자 수 캡. 저장소에서 읽고,
+  // 팝업에서 변경되면 실시간 반영함.
   let debug = false;
-  chrome.storage.local.get(["debug", "batchSize", "maxChars", "concurrency"]).then(
-    ({ debug: d, batchSize, maxChars, concurrency }) => {
+  let showProgressToast = true;
+  chrome.storage.local.get(
+    ["debug", "showProgressToast", "batchSize", "maxChars", "concurrency"],
+  ).then(
+    ({ debug: d, showProgressToast: showToast, batchSize, maxChars, concurrency }) => {
       debug = Boolean(d);
+      showProgressToast = showToast !== false;
       applyBatchSize(batchSize);
       applyMaxChars(maxChars);
       applyConcurrency(concurrency);
@@ -140,6 +145,13 @@
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== "local") return;
     if (changes.debug) debug = Boolean(changes.debug.newValue);
+    if (changes.showProgressToast) {
+      showProgressToast = changes.showProgressToast.newValue !== false;
+      if (!showProgressToast && toastEl) {
+        toastEl.style.opacity = "0";
+        if (toastTimer) clearTimeout(toastTimer);
+      }
+    }
     if (changes.batchSize) applyBatchSize(changes.batchSize.newValue);
     if (changes.maxChars) applyMaxChars(changes.maxChars.newValue);
     if (changes.concurrency) applyConcurrency(changes.concurrency.newValue);
@@ -1165,6 +1177,8 @@
     * @param {"info"|"progress"|"error"} [kind] - 메시지 종류(표시 시간·색상 구분용).
    */
   function showToast(text, kind = "info") {
+    if (!showProgressToast) return;
+
     if (!toastEl) {
       toastEl = document.createElement("div");
       toastEl.id = "__ai-translator-toast";

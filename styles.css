@@ -132,6 +132,10 @@ body {
   margin-top: 12px;
 }
 
+[hidden] {
+  display: none !important;
+}
+
 .field > span {
   display: block;
   margin-bottom: 4px;
