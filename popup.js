@@ -7,7 +7,7 @@
 //   서비스에 저장해 둔 값이 폼에 표시됨.
 
 const DEFAULT_PROVIDER = "openai";
-const AVAILABLE_PROVIDERS = new Set(["openai", "openrouter", "gemini"]);
+const AVAILABLE_PROVIDERS = new Set(["openai", "openrouter", "laozhang", "gemini"]);
 
 // 프로바이더별 입력 힌트(placeholder). 지원 프로바이더 추가 시 여기에 등록함.
 const PROVIDER_META = {
@@ -21,7 +21,11 @@ const PROVIDER_META = {
     modelHint: "예: deepseek/deepseek-v4-flash",
     modelsEndpoint: "https://openrouter.ai/api/v1/models",
   },
-  laozhang: { apiKeyHint: "LaoZhang AI API 키", modelHint: "예: gpt-4o-mini" },
+  laozhang: {
+    apiKeyHint: "LaoZhang AI API 키",
+    modelHint: "예: gpt-4o-mini",
+    modelsEndpoint: "https://api2.laozhang.ai/v1/models",
+  },
   gemini: {
     apiKeyHint: "Google AI Studio API 키",
     modelHint: "예: gemini-3.1-flash-lite",
