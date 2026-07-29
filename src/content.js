@@ -172,15 +172,16 @@
   }
 
   /**
-   * 오류 로그를 출력함. 메시지는 항상 출력하고, 부가 데이터는 debug 일 때만 출력함.
+   * 오류 로그를 출력함(debug 가 켜져 있을 때만). debug 가 꺼져 있으면 무시함.
    *
    * @param {string} location - 로그 위치.
    * @param {string} message - 오류 메시지(영문).
-   * @param {*} [data] - 진단용 부가 데이터(원문/응답 등, debug 시에만 출력).
+   * @param {*} [data] - 진단용 부가 데이터(원문/응답 등, 선택).
    */
   function logError(location, message, data) {
+    if (!debug) return;
     const line = `[ai_translator ${new Date().toISOString()}] [${location}] ${message}`;
-    if (debug && data !== undefined) console.error(line, data);
+    if (data !== undefined) console.error(line, data);
     else console.error(line);
   }
 

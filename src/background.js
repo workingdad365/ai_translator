@@ -133,12 +133,15 @@ async function handleTranslate(segments) {
     return { translations, missingIndices: translations.missingIndices || [] };
   } catch (err) {
     // [background.js/handleTranslate] 번역 실패 시 콘텐츠 스크립트로 오류 전달.
-    // 프로바이더/모델/소요시간을 함께 남겨 간헐적 실패의 원인 추적을 도움.
-    console.error(
-      `[ai_translator ${new Date().toISOString()}] [background/handleTranslate] ` +
-        `translate failed (provider=${provider}, model=${model}, ${Date.now() - startedAt}ms):`,
-      err,
-    );
+    // 콘솔 오류 로그는 debug 일 때만 남기며, 프로바이더/모델/소요시간을 함께 남겨
+    // 간헐적 실패의 원인 추적을 도움.
+    if (debug) {
+      console.error(
+        `[ai_translator ${new Date().toISOString()}] [background/handleTranslate] ` +
+          `translate failed (provider=${provider}, model=${model}, ${Date.now() - startedAt}ms):`,
+        err,
+      );
+    }
     return {
       error: err.message,
       errorCode: err.code || null,
