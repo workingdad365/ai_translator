@@ -283,7 +283,7 @@ test("LaoZhang AI 요청은 공식 백업 엔드포인트와 max_tokens를 사�
   }
 
   const requestBody = JSON.parse(requestOptions.body);
-  assert.equal(requestUrl, "https://api-vip.laozhang.ai/v1/chat/completions");
+  assert.equal(requestUrl, "https://api2.laozhang.ai/v1/chat/completions");
   assert.equal(requestOptions.headers.Authorization, "Bearer laozhang-test-key");
   assert.equal(requestOptions.headers["Content-Type"], "application/json");
   assert.equal(typeof requestBody.max_tokens, "number");

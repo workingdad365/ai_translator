@@ -15,7 +15,7 @@ import { createTranslator } from "./openai-compatible.js";
  * @returns {Promise<string[]>} 입력과 동일한 순서의 번역된 HTML 세그먼트 배열.
  */
 export const translateSegments = createTranslator({
-  endpoint: "https://api-vip.laozhang.ai/v1/chat/completions",
+  endpoint: "https://api2.laozhang.ai/v1/chat/completions",
   label: "LaoZhang AI",
   tokenParam: "max_tokens",
 });
