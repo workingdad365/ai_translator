@@ -26,6 +26,10 @@
   const PROTECTED_ATTR = "data-ai-translator-protected";
   const OVERLAY_ATTR = "data-ai-translator-overlay";
   const OVERLAY_STYLE_ATTR = "data-ai-translator-overlay-style";
+  const OVERLAY_SHADOW_ATTR = "data-ai-translator-overlay-shadow";
+  // 번역기가 직접 붙인 closed shadow root. closed 이므로 페이지 스크립트와
+  // 블록 스캐너(el.shadowRoot) 양쪽 모두에 노출되지 않음.
+  const shadowOverlays = new WeakMap();
   const SEMANTIC_BLOCK_TAGS = new Set([
     "P", "LI", "H1", "H2", "H3", "H4", "H5", "H6",
     "BLOCKQUOTE", "DT", "DD", "FIGCAPTION",
@@ -76,7 +80,7 @@
 
   const translatedBlocks = new WeakSet(); // 번역 완료된 블록 요소
   const appliedBlockStates = new WeakMap(); // 적용 HTML과 재렌더 복구 상태
-  const overlayTranslationCache = new Map(); // Reddit 소유 DOM 재생성 시 재사용할 번역문
+  const overlayTranslationCache = new Map(); // Reddit 소유 DOM 재생성 시 재사용할 {text, html}
   let failedBlocks = new Set(); // 최종적으로 화면 적용에 실패한 블록
   const queuedBlocks = new WeakSet(); // 큐에 이미 담긴 블록 요소(중복 방지)
   let observedEls = new WeakSet(); // IntersectionObserver 로 관찰 중인 블록(세션 중지 시 교체)
@@ -301,10 +305,13 @@
       if (!isTranslatableBlock(el)) continue;
       if (isStableOverlayTarget(el)) {
         const sourceText = normalizeBlockText(el.textContent);
-        const cachedTranslation = overlayTranslationCache.get(sourceText);
-        if (cachedTranslation && applyTranslationOverlay(el, cachedTranslation)) {
+        const cached = overlayTranslationCache.get(sourceText);
+        if (cached && applyTranslationOverlay(el, cached.text, cached.html)) {
           translatedBlocks.add(el);
-          appliedBlockStates.set(el, createAppliedState(el, sourceText, cachedTranslation, true));
+          appliedBlockStates.set(
+            el,
+            createAppliedState(el, sourceText, cached.text, cached.html, true),
+          );
           translatedBlockCount++;
           continue;
         }
@@ -435,7 +442,7 @@
               }
               const translatedText = state.translatedText;
               state.html = overlayTarget.innerHTML;
-              if (applyTranslationOverlay(overlayTarget, translatedText)) {
+              if (applyTranslationOverlay(overlayTarget, translatedText, state.translatedHtml)) {
                 state.overlay = true;
                 state.counted = true;
                 translatedBlockCount++;
@@ -543,13 +550,15 @@
    * @param {Element} el - 적용 대상.
    * @param {string} sourceText - 정규화한 원문.
    * @param {string} translatedText - 정규화한 번역문.
+   * @param {string} translatedHtml - 정화된 번역 HTML(링크 등 인라인 태그 포함).
    * @param {boolean} overlay - 오버레이 적용 여부.
    * @returns {object} 적용 상태.
    */
-  function createAppliedState(el, sourceText, translatedText, overlay) {
+  function createAppliedState(el, sourceText, translatedText, translatedHtml, overlay) {
     return {
       html: el.innerHTML,
       translatedText,
+      translatedHtml,
       sourceText,
       root: el.getRootNode(),
       href: el.tagName === "A" ? el.getAttribute("href") : null,
@@ -601,14 +610,84 @@
   }
 
   /**
+   * 문서 조각을 HTML 문자열로 직렬화함(원본 조각은 소비하지 않음).
+   *
+   * @param {DocumentFragment} fragment - 직렬화할 조각.
+   * @returns {string} HTML 문자열.
+   */
+  function fragmentToHtml(fragment) {
+    const tpl = document.createElement("template");
+    tpl.content.append(fragment.cloneNode(true));
+    return tpl.innerHTML;
+  }
+
+  /**
+   * 번역기가 붙인 shadow overlay 를 해제해 원본 라이트 DOM 이 다시 렌더링되게 함.
+   * shadow root 는 분리할 수 없으므로 <slot> 만 남겨 원본 자식을 그대로 투과시킴.
+   *
+   * @param {Element} el - 해제할 블록.
+   */
+  function resetShadowOverlay(el) {
+    const shadow = shadowOverlays.get(el);
+    if (!shadow) return;
+    shadow.replaceChildren(document.createElement("slot"));
+    el.removeAttribute(OVERLAY_SHADOW_ATTR);
+  }
+
+  /**
+   * 번역문에 링크가 포함된 경우 CSS 생성 콘텐츠 대신 실제 DOM 을 shadow root 에 그림.
+   * ::after 오버레이는 텍스트만 표시할 수 있어 <a href> 가 클릭 불가능해지므로,
+   * closed shadow root 에 번역 DOM 을 넣어 링크를 살림. 원본 라이트 DOM 은 그대로
+   * 남아(렌더링만 되지 않음) 프레임워크의 재렌더와 충돌하지 않음.
+   *
+   * @param {Element} el - 번역을 표시할 원본 블록.
+   * @param {string} translatedHtml - 이미 정화된 번역 HTML.
+   * @returns {boolean} shadow 오버레이를 적용했으면 true.
+   */
+  function applyShadowOverlay(el, translatedHtml) {
+    if (!translatedHtml) return false;
+    const tpl = document.createElement("template");
+    tpl.innerHTML = translatedHtml;
+    if (!tpl.content.querySelector("a[href]")) return false;
+    if (!/\p{L}/u.test(tpl.content.textContent || "")) return false;
+
+    let shadow = shadowOverlays.get(el);
+    if (!shadow) {
+      // 페이지가 소유한 shadow root 는 건드리지 않음.
+      if (el.shadowRoot) return false;
+      try {
+        shadow = el.attachShadow({ mode: "closed" });
+      } catch {
+        // p/div/span 등 shadow host 로 허용되지 않는 태그(li 등)는 텍스트 오버레이로 대체함.
+        return false;
+      }
+      shadowOverlays.set(el, shadow);
+    }
+
+    const style = document.createElement("style");
+    style.textContent = `
+      a { color: inherit; text-decoration: underline; cursor: pointer; }
+      a:hover { text-decoration: underline; }
+    `;
+    shadow.replaceChildren(style, tpl.content);
+    clearOverlayTextStyles(el);
+    el.setAttribute(OVERLAY_SHADOW_ATTR, "");
+    return true;
+  }
+
+  /**
    * 프레임워크가 자식 DOM을 계속 복원하는 블록에 번역문을 CSS 생성 콘텐츠로 표시함.
    * 원본 자식은 그대로 유지하여 React/Lit 등의 렌더러와 DOM 소유권이 충돌하지 않음.
    *
    * @param {Element} el - 번역을 표시할 원본 블록.
   * @param {string} translatedText - 표시할 번역문.
+  * @param {string} [translatedHtml] - 링크 등 인라인 태그를 포함한 정화된 번역 HTML.
    * @returns {boolean} 오버레이를 적용했으면 true.
    */
-  function applyTranslationOverlay(el, translatedText) {
+  function applyTranslationOverlay(el, translatedText, translatedHtml) {
+    if (applyShadowOverlay(el, translatedHtml)) return true;
+    resetShadowOverlay(el);
+
     translatedText = translatedText.trim();
     if (!translatedText) return false;
 
@@ -656,6 +735,12 @@
 
   /** 같은 DOM 요소가 새 원문에 재사용될 때 기존 번역 오버레이를 제거함. */
   function clearTranslationOverlay(el) {
+    resetShadowOverlay(el);
+    clearOverlayTextStyles(el);
+  }
+
+  /** CSS 생성 콘텐츠 오버레이용 속성과 커스텀 프로퍼티를 제거함. */
+  function clearOverlayTextStyles(el) {
     el.removeAttribute(OVERLAY_ATTR);
     for (const property of [
       "--ai-translator-overlay-color",
@@ -903,6 +988,10 @@
         }
       }
     });
+    // 새 창으로 여는 링크의 reverse tabnabbing 방지.
+    frag.querySelectorAll('a[target="_blank"]').forEach((a) => {
+      a.setAttribute("rel", "noopener noreferrer");
+    });
 
     return tpl.innerHTML;
   }
@@ -1047,27 +1136,38 @@
           const restored = restoreProtectedHtml(html, block.protectedNodes, block.protectedId);
           if (restored && target) {
             const translatedText = normalizeBlockText(restored.textContent);
+            const translatedHtml =
+              block.protectedNodes.length === 0 ? fragmentToHtml(restored) : "";
             if (
               block.protectedNodes.length === 0 &&
               translatedText &&
               isStableOverlayTarget(target)
             ) {
-              if (!applyTranslationOverlay(target, translatedText)) {
+              if (!applyTranslationOverlay(target, translatedText, translatedHtml)) {
                 queuedBlocks.delete(block.el);
                 markBlockFailed(block.el);
                 return;
               }
-              overlayTranslationCache.set(block.sourceText, translatedText);
+              overlayTranslationCache.set(block.sourceText, {
+                text: translatedText,
+                html: translatedHtml,
+              });
               appliedBlockStates.set(
                 target,
-                createAppliedState(target, block.sourceText, translatedText, true),
+                createAppliedState(target, block.sourceText, translatedText, translatedHtml, true),
               );
             } else {
               target.replaceChildren(restored);
               if (block.protectedNodes.length === 0 && translatedText) {
                 appliedBlockStates.set(
                   target,
-                  createAppliedState(target, block.sourceText, translatedText, false),
+                  createAppliedState(
+                    target,
+                    block.sourceText,
+                    translatedText,
+                    translatedHtml,
+                    false,
+                  ),
                 );
               }
             }

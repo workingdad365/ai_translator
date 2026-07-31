@@ -22,6 +22,9 @@ const BASE_RULES = [
     "a question, or lacks terminal punctuation. Only preserve code, URLs, numbers, and genuinely untranslatable proper nouns.",
   "Preserve every HTML tag and ALL of its attributes (href, class, id, data-*, etc.) EXACTLY as given. " +
     "Never translate, rename, reorder, or drop attributes or their values (especially URLs).",
+  "NEVER delete an <a> element or unwrap it into plain text. Every <a> in a segment MUST appear in that segment's " +
+    "translation with its href value byte-for-byte identical. If the link text is a bare URL, keep the URL as-is and " +
+    "keep it inside the same <a> element.",
   "Korean word order differs from English, so you MUST move each inline tag to wrap the Korean words that correspond to the " +
     "SAME content it originally wrapped. Example: `Meta has <a href=\"x\">deactivated</a> the tool` -> " +
     "`메타는 그 도구를 <a href=\"x\">비활성화</a>했다`. Keep the tag balanced (matching open/close) and around the translated equivalent.",
