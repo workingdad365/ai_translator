@@ -6,6 +6,8 @@
 
 import { translateSegments as openaiTranslate } from "./providers/openai.js";
 import { translateSegments as openrouterTranslate } from "./providers/openrouter.js";
+import { translateSegments as nanogptTranslate } from "./providers/nanogpt.js";
+import { translateSegments as runwareTranslate } from "./providers/runware.js";
 import { translateSegments as laozhangTranslate } from "./providers/laozhang.js";
 import { translateSegments as geminiTranslate } from "./providers/gemini.js";
 
@@ -15,6 +17,8 @@ import { translateSegments as geminiTranslate } from "./providers/gemini.js";
 const PROVIDERS = {
   openai: openaiTranslate,
   openrouter: openrouterTranslate,
+  nanogpt: nanogptTranslate,
+  runware: runwareTranslate,
   laozhang: laozhangTranslate,
   gemini: geminiTranslate,
 };

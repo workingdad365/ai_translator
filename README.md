@@ -1,23 +1,23 @@
 # AI 페이지 번역기
 
-현재 보고 있는 웹 페이지를 원본 언어와 무관하게 **한국어로 번역**하는 Chrome 확장 프로그램(Manifest V3). LLM 프로바이더로 **OpenAI**, **OpenRouter**, **LaoZhang AI**, **Gemini**를 지원하며, 추후 다른 프로바이더로 확장할 수 있도록 설계함. LaoZhang AI는 OpenAI 호환 Chat Completions API를, Gemini는 Google의 **Interactions API**를 사용함.
+현재 보고 있는 웹 페이지를 원본 언어와 무관하게 **한국어로 번역**하는 Chrome 확장 프로그램(Manifest V3). LLM 프로바이더로 **OpenAI**, **OpenRouter**, **nano-gpt**, **runware**, **LaoZhang AI**, **Gemini**를 지원하며, 추후 다른 프로바이더로 확장할 수 있도록 설계함. OpenRouter/nano-gpt/runware/LaoZhang AI는 OpenAI 호환 Chat Completions API를, Gemini는 Google의 **Interactions API**를 사용함.
 
 ## 주요 기능
 
 - 확장 아이콘(팝업)의 **"이 페이지 번역"** 버튼을 누를 때만 번역을 실행함. 페이지 진입 시 자동 번역하지 않음.
 - 뷰포트에 보이는 텍스트부터 번역하며, **스크롤로 새 영역이 나타나면 이어서 번역**함(`IntersectionObserver`).
 - 무한 스크롤 등으로 DOM이 동적으로 추가되면 자동으로 감지해 번역함(`MutationObserver`).
-- 사용자가 **API 키**와 **모델명**을 직접 입력함(예: OpenAI `gpt-5.4-mini`, OpenRouter `deepseek/deepseek-v4-flash`, LaoZhang AI `gpt-4o-mini`, Gemini `gemini-3.1-flash-lite`).
-- **프로바이더별 자격증명 저장**: OpenAI/OpenRouter/LaoZhang AI/Gemini 각각의 API 키·모델을 따로 저장하며, 프로바이더를 전환하면 해당 프로바이더에 저장한 값이 자동으로 표시됨.
-- **OpenRouter 실행 제공자 지정**: OpenRouter 선택 시 모델을 실제로 호스팅하는 실행 제공자의 slug(예: `groq`, `deepinfra/turbo`)를 선택적으로 저장함. 지정하면 요청의 `provider.only`로 전달하여 해당 실행 제공자로 제한하고, 비워 두면 OpenRouter 자동 라우팅을 사용함.
+- 사용자가 **API 키**와 **모델명**을 직접 입력함(예: OpenAI `gpt-5.4-mini`, OpenRouter `deepseek/deepseek-v4-flash`, nano-gpt `openai/gpt-5.2`, runware `minimax:m2.7@0`, LaoZhang AI `gpt-4o-mini`, Gemini `gemini-3.1-flash-lite`).
+- **프로바이더별 자격증명 저장**: OpenAI/OpenRouter/nano-gpt/runware/LaoZhang AI/Gemini 각각의 API 키·모델을 따로 저장하며, 프로바이더를 전환하면 해당 프로바이더에 저장한 값이 자동으로 표시됨.
+- **OpenRouter 실행 제공자 지정**: OpenRouter 선택 시 모델을 실제로 호스팅하는 실행 제공자의 slug(예: `groq`, `deepinfra/turbo`)를 선택적으로 저장함. 지정하면 요청의 `provider.only`로 전달하여 해당 실행 제공자로 제한하고, 비워 두면 OpenRouter 자동 라우팅을 사용함. nano-gpt/runware는 실행 제공자 지정을 사용하지 않고 서비스의 자동 라우팅을 그대로 씀.
 - **말투 선택**: 페이지 전체를 일관된 **반말(기사체)** 또는 **존댓말(합니다체)** 로 번역하거나, **캐주얼체(게시판)** 로 화자마다 다른 격식과 친밀도를 유지함. 캐주얼체는 Reddit 같은 일반 게시판에 맞춰 반말·해요체·합니다체·높은 존칭을 원문의 태도에 따라 선택하되, 과격한 커뮤니티 고유 말투나 불필요한 비속어를 만들지 않음.
-- **추론 강도 조정**: 추론(reasoning) 모델이 번역 전에 사고 과정을 길게 도는 것을 줄임. 없음(기본)/최소/낮음/모델 기본값 중 선택. 프로바이더별로 올바른 형식(OpenAI `reasoning_effort`, OpenRouter `reasoning` 객체, Gemini `generation_config.thinking_level`)만 전송함. LaoZhang AI는 공식 API 매뉴얼에 추론 파라미터가 명시되어 있지 않아 해당 설정을 전송하지 않음. Gemini에는 완전 비활성 값이 없어 `없음`을 `minimal`로 매핑하며, 모델이 거부하면 모델 기본값으로 자동 폴백함.
+- **추론 강도 조정**: 추론(reasoning) 모델이 번역 전에 사고 과정을 길게 도는 것을 줄임. 없음(기본)/최소/낮음/모델 기본값 중 선택. 프로바이더별로 올바른 형식(OpenAI·runware `reasoning_effort`, OpenRouter·nano-gpt `reasoning` 객체, Gemini `generation_config.thinking_level`)만 전송함. LaoZhang AI는 공식 API 매뉴얼에 추론 파라미터가 명시되어 있지 않아 해당 설정을 전송하지 않음. Gemini에는 완전 비활성 값이 없어 `없음`을 `minimal`로 매핑하며, 모델이 거부하면 모델 기본값으로 자동 폴백함.
 - **용어집(고정 번역)**: 특정 고유명사·용어를 항상 지정한 번역으로 치환함(예: `Sam Altman=샘 올트먼`). 설정에 저장되어 재사용됨.
 - **자동 재시도**: 일시적 오류(네트워크 오류·429 레이트리밋·5xx 서버 오류·빈 응답)는 지수 백오프로 자동 재시도함(배치당 최대 2회). 인증 오류(401/403) 등 영구 오류와 **요청 타임아웃(60초 무응답)**은 즉시 실패시킴(그 모델이 감당 못 하는 것으로 보고 재시도하지 않음).
 - **배치 크기/문자 수 캡 조정**: 한 요청에 담는 세그먼트 수(1~100, 기본 30)와 문자 수 캡(500~20000, 기본 5000)을 설정에서 조정할 수 있음. 배치는 둘 중 먼저 도달하는 쪽에서 끊김. 느린 모델은 작게 잡으면 배치당 응답이 빨라져 타임아웃 위험이 줄어듦.
 - **동시 실행(병렬 요청)**: 한 번의 플러시에서 여러 배치를 동시에 요청함(1~10, 기본 3). 배치들은 서로 독립적으로 치환되므로, 동시 실행 수를 높이면 배치당 왕복 지연이 누적되지 않아 전체 번역이 빨라짐. 레이트리밋(429)이 자주 발생하면 값을 낮춤.
 - **요청 타임아웃 조정**: 배치당 응답 대기 시간(10~300초, 기본 60초)을 설정에서 조정할 수 있음. 초과하면 재시도 없이 실패 처리함.
-- **출력 토큰 자동 산정**: 배치 크기에 비례해 OpenAI/OpenRouter의 `max_completion_tokens`, LaoZhang AI의 `max_tokens` 또는 Gemini의 `generation_config.max_output_tokens`를 자동 설정함. 추론 토큰까지 고려해 여유분을 더해 잘림을 방지함.
+- **출력 토큰 자동 산정**: 배치 크기에 비례해 OpenAI/OpenRouter/nano-gpt/runware의 `max_completion_tokens`, LaoZhang AI의 `max_tokens` 또는 Gemini의 `generation_config.max_output_tokens`를 자동 설정함. 추론 토큰까지 고려해 여유분을 더해 잘림을 방지함.
 - **Gemini 구조화 출력**: Interactions API의 `response_format`에 배치 키별 JSON Schema를 제공해 번역 응답 형태를 강제함. 페이지 번역 요청은 대화 상태가 필요 없으므로 `store:false`로 실행함.
 - **디버그 로그**: 설정에서 켜면 요청·응답 상세를 콘솔에 출력하여 간헐적 실패의 원인을 추적할 수 있음(아래 [디버깅](#디버깅) 참고).
 
@@ -57,6 +57,8 @@ ai_translator/
       openai-compatible.js  # OpenAI 호환 공통 로직 (프롬프트 구성 + fetch)
       openai.js             # OpenAI 프로바이더 (엔드포인트 지정 래퍼)
       openrouter.js         # OpenRouter 프로바이더 (엔드포인트 지정 래퍼)
+      nanogpt.js            # nano-gpt 프로바이더 (엔드포인트 지정 래퍼)
+      runware.js            # runware 프로바이더 (엔드포인트 지정 래퍼)
       laozhang.js           # LaoZhang AI 프로바이더 (엔드포인트 지정 래퍼)
       gemini.js             # Gemini Interactions API 프로바이더
 ```
@@ -80,6 +82,14 @@ OpenAI 호환(Chat Completions) API라면 `openai-compatible.js` 의 `createTran
 4. 프로바이더별 엔드포인트가 페이지가 아닌 서비스 워커에서 호출되므로, `manifest.json` 의 `host_permissions` 에 해당 API 도메인을 추가함.
 
 > API 키와 모델은 프로바이더별로 `chrome.storage.local` 의 `credentials[provider] = { apiKey, model }` 에 저장됨. 과거 단일 형식(최상위 `apiKey`/`model`)으로 저장된 값은 OpenAI 자격증명으로 자동 이관됨.
+
+### nano-gpt 설정
+
+nano-gpt(nano-gpt.com)는 OpenAI 호환 엔드포인트 `https://nano-gpt.com/api/v1`을 제공함. 계정에서 발급한 API 키를 팝업에 입력하고, 모델명에는 nano-gpt 모델 ID(예: `openai/gpt-5.2`)를 사용함. 요청은 `Authorization: Bearer <API_KEY>` 헤더로 인증하며, 확장 프로그램은 전체 경로 `https://nano-gpt.com/api/v1/chat/completions`를 호출함. 모델 목록은 `GET /api/v1/models`로 조회하므로 팝업의 **모델 가져오기** 버튼을 쓸 수 있음. 실행 제공자(provider) 지정 기능은 사용하지 않고 nano-gpt 자동 라우팅에 맡김.
+
+### runware 설정
+
+runware(runware.ai)는 OpenAI 호환 엔드포인트 `https://api.runware.ai/v1`을 제공함. 모델명에는 runware AIR ID(예: `minimax:m2.7@0`, `google:gemini@3.1-pro`)를 사용함. 요청은 `Authorization: Bearer <API_KEY>` 헤더로 인증하며, 확장 프로그램은 전체 경로 `https://api.runware.ai/v1/chat/completions`를 호출함. 모델 목록은 `GET /v1/models`로 조회함.
 
 ### LaoZhang AI 설정
 

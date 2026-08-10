@@ -78,6 +78,9 @@
   // 스캔/플러시 디바운스 지연(ms).
   const DEBOUNCE_MS = 250;
 
+  // 번역 시작 후 "대상 0건" 안내를 띄우기 전 늦은 렌더를 기다리는 시간(ms).
+  const EMPTY_CHECK_DELAY_MS = 2000;
+
   const translatedBlocks = new WeakSet(); // 번역 완료된 블록 요소
   const appliedBlockStates = new WeakMap(); // 적용 HTML과 재렌더 복구 상태
   const overlayTranslationCache = new Map(); // Reddit 소유 DOM 재생성 시 재사용할 {text, html}
@@ -96,6 +99,8 @@
   let pendingReapplies = 0; // 페이지 재렌더 후 번역문 재적용 대기 수
   let translatedBlockCount = 0; // 현재 세션에서 완료된 블록 수(표시용)
   let failedBlockCount = 0; // 현재 세션에서 화면 적용에 실패한 블록 수
+  let foundBlockCount = 0; // 현재 세션에서 번역 대상으로 판정한 블록 수(0건 안내용)
+  let emptyCheckTimer = null; // 번역 대상 0건 안내 확인 타이머
   let io = null; // IntersectionObserver
   let mo = null; // MutationObserver
   let scanTimer = null;
@@ -228,6 +233,23 @@
   }
 
   /**
+   * 사이트가 지정한 번역 거부(`translate="no"`) 영역에 속하는지 판별함.
+   *
+   * 문서 루트(`<html>`/`<body>`)에 걸린 전역 거부는 자동 번역기를 막으려는 표시이므로,
+   * 사용자가 명시적으로 번역을 실행한 이 확장에서는 무시함(예: hedra.com 은 `<html
+   * translate="no">` 라 전역 거부를 존중하면 페이지 전체가 번역 대상에서 빠짐).
+   * 문서 안쪽 특정 영역에 붙은 거부는 그대로 존중함.
+   *
+   * @param {Element} el - 검사할 요소.
+   * @returns {boolean} 존중해야 할 번역 거부 영역이면 true.
+   */
+  function isTranslateOptOut(el) {
+    const marked = el.closest("[translate=no]");
+    if (!marked) return false;
+    return marked !== document.documentElement && marked !== document.body;
+  }
+
+  /**
    * 블록 요소가 번역 대상인지 판별함.
    *
    * @param {Element} el - 검사할 블록 요소.
@@ -237,7 +259,7 @@
     if (!el || translatedBlocks.has(el) || queuedBlocks.has(el)) return false;
     if (SKIP_TAGS.has(el.tagName)) return false;
     if (el.isContentEditable) return false;
-    if (el.closest("[translate=no]")) return false;
+    if (isTranslateOptOut(el)) return false;
     if (isRedditLiveCounterBlock(el)) return false;
     if (!isLeafBlock(el)) return false; // 블록 자식을 가진 컨테이너는 제외
     const text = el.textContent;
@@ -303,6 +325,7 @@
     let hasEagerBlocks = false;
     for (const el of blocks) {
       if (!isTranslatableBlock(el)) continue;
+      foundBlockCount++;
       if (isStableOverlayTarget(el)) {
         const sourceText = normalizeBlockText(el.textContent);
         const cached = overlayTranslationCache.get(sourceText);
@@ -1234,6 +1257,7 @@
     pendingReapplies = 0;
     translatedBlockCount = 0;
     failedBlockCount = 0;
+    foundBlockCount = 0;
     failedBlocks = new Set();
     lastToastKind = null;
 
@@ -1248,6 +1272,19 @@
 
     showToast("번역을 시작합니다…", "info");
     scanAndObserve();
+    // 늦게 렌더되는 페이지를 감안해 재스캔 여유를 둔 뒤, 그래도 대상이 없으면
+    // 아무 토스트도 뜨지 않아 멈춘 것처럼 보이므로 원인을 알림.
+    emptyCheckTimer = setTimeout(() => {
+      emptyCheckTimer = null;
+      if (!active) return;
+      scanAndObserve();
+      if (foundBlockCount === 0 && translatedBlockCount === 0) {
+        showToast(
+          "번역할 텍스트를 찾지 못했습니다(본문이 이미지·캠버스이거나 접근할 수 없는 구조일 수 있음).",
+          "error",
+        );
+      }
+    }, EMPTY_CHECK_DELAY_MS);
   }
 
   /** 번역 세션을 중지하고 관찰자를 해제함. 이미 치환된 텍스트는 유지됨. */
@@ -1257,6 +1294,7 @@
     if (mo) { mo.disconnect(); mo = null; }
     if (scanTimer) { clearTimeout(scanTimer); scanTimer = null; }
     if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
+    if (emptyCheckTimer) { clearTimeout(emptyCheckTimer); emptyCheckTimer = null; }
     pendingBlocks.clear();
     // WeakSet 은 clear() 가 없어 참조 교체로 초기화함.
     // 다음 세션에서 io.observe 재등록이 정상 동작하도록 관찰 집합을 비움.
