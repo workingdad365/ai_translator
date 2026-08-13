@@ -13,6 +13,7 @@
         <p class="product-name">AI 페이지 번역기</p>
         <h1>한국어 번역</h1>
       </div>
+      <span id="app-version" class="app-version"></span>
     </header>
 
     <main>
@@ -30,8 +31,10 @@
             <option value="openai">OpenAI</option>
             <option value="openrouter">OpenRouter</option>
             <option value="nanogpt">nano-gpt</option>
-            <option value="runware">runware</option>
-            <option value="laozhang">LaoZhang AI</option>
+            <option value="litellm">LiteLLM (자체 프록시)</option>
+            <!-- runware/laozhang 는 목록에서 숨기되, 기존 저장값 표시를 위해 option 자체는 남겨 둠. -->
+            <option value="runware" hidden>runware</option>
+            <option value="laozhang" hidden>LaoZhang AI</option>
             <option value="gemini">Gemini (Interactions API)</option>
           </select>
         </label>

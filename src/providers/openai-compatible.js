@@ -237,7 +237,9 @@ const REASONING_PREFERENCE = ["none", "minimal", "low", "medium", "high", "xhigh
 
 /**
  * HTTP 400 응답 본문이 response_format(json_object) 미지원 오류인지 판별함.
- * 프로바이더마다 문구가 달라 핵심 키워드로 느슨하게 매칭함.
+ * 프로바이더마다 문구가 달라 핵심 키워드로 느슨하게 매칭함. Runware 처럼
+ * json_object 를 받고도 스키마를 요구하는(`Missing required parameter: 'jsonSchema'`)
+ * 경우도 같은 폴백(필드 제거 후 재시도) 대상으로 처리함.
  *
  * @param {number} status - HTTP 상태 코드.
  * @param {string} detail - 응답 본문 텍스트.
@@ -245,7 +247,7 @@ const REASONING_PREFERENCE = ["none", "minimal", "low", "medium", "high", "xhigh
  */
 function isUnsupportedResponseFormat(status, detail) {
   if (status !== 400 || !detail) return false;
-  return /response.?format|json[_\s]?object/i.test(detail);
+  return /response.?format|json[_\s-]?object|json[_\s-]?schema/i.test(detail);
 }
 
 /**
@@ -741,6 +743,9 @@ async function attemptTranslate({ endpoint, headers, bodyStr, label, debug, wher
  *   브레이크포인트(`cache_control`)를 붙일지 여부. OpenRouter 처럼 블록 단위 캐시 마커를
  *   프로바이더별 형식으로 자동 변환하고 미지원 모델에서는 무시하는 경우에만 켬. OpenAI
  *   직접 호출은 자동(암묵적) 캐싱이라 켤 필요가 없음. 기본값 false.
+ * @param {boolean} [config.supportsResponseFormat] - `response_format={type:"json_object"}`
+ *   전송 여부. false 면 처음부터 생략함(json_object 를 거부하거나 별도 스키마를 요구하는
+ *   프로바이더 대비). 기본값 true.
  * @returns {(params: {apiKey: string, model: string, segments: string[], tone?: string, glossary?: string, reasoningEffort?: string, debug?: boolean}) => Promise<string[]>}
  *   입력과 동일한 길이/순서의 한국어 번역 배열을 반환하는 translateSegments 함수.
  */
@@ -752,6 +757,7 @@ export function createTranslator({
   reasoningParam = null,
   extraBody = null,
   cacheSystemPrompt = false,
+  supportsResponseFormat = true,
 }) {
   /**
    * 텍스트 세그먼트 배열을 한국어로 번역함.
@@ -834,8 +840,9 @@ export function createTranslator({
     };
 
     const modelKey = `${endpoint}|${model}`;
-    // 이미 json_object 미지원으로 확인된 모델이면 처음부터 필드를 생략함.
-    let useResponseFormat = !NO_JSON_OBJECT_MODELS.has(modelKey);
+    // 프로바이더가 json_object 를 지원하지 않거나, 이미 미지원으로 확인된 모델이면
+    // 처음부터 필드를 생략함.
+    let useResponseFormat = supportsResponseFormat && !NO_JSON_OBJECT_MODELS.has(modelKey);
     // 요청 추론 값. "default"/미지정이면 null. 이미 폴백이 확인된 모델이면 그 값을 씀.
     let currentEffort =
       reasoningEffort && reasoningEffort !== "default" ? reasoningEffort : null;

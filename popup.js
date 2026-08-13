@@ -12,6 +12,7 @@ const AVAILABLE_PROVIDERS = new Set([
   "openrouter",
   "nanogpt",
   "runware",
+  "litellm",
   "laozhang",
   "gemini",
 ]);
@@ -37,6 +38,11 @@ const PROVIDER_META = {
     apiKeyHint: "runware API 키",
     modelHint: "예: minimax:m2.7@0",
     modelsEndpoint: "https://api.runware.ai/v1/models",
+  },
+  litellm: {
+    apiKeyHint: "LiteLLM 가상 키 (sk-...)",
+    modelHint: "예: ws-gpt",
+    modelsEndpoint: "https://llm.drasys.com/v1/models",
   },
   laozhang: {
     apiKeyHint: "LaoZhang AI API 키",
@@ -108,6 +114,7 @@ const els = {
   settings: document.getElementById("settings"),
   notice: document.getElementById("notice"),
   saveNotice: document.getElementById("save-notice"),
+  appVersion: document.getElementById("app-version"),
 };
 
 // 현재 활성 탭의 번역 세션 활성 여부(버튼 표시 상태 결정).
@@ -232,6 +239,67 @@ function clearModelOptions() {
 }
 
 /**
+ * 모델 항목에서 모델 ID 문자열을 추출함. 프로바이더마다 필드명이 달라 순서대로 탐색함.
+ *
+ * @param {*} item - 모델 목록 배열의 원소.
+ * @returns {string} 모델 ID. 추출 실패 시 빈 문자열.
+ */
+function toModelId(item) {
+  if (typeof item === "string") return item;
+  const id = item?.id || item?.model_id || item?.model || item?.name;
+  return typeof id === "string" ? id.replace(/^models\//, "") : "";
+}
+
+/**
+ * 응답 본문에서 모델 목록 배열을 찾아 반환함.
+ *
+ * 프로바이더마다 목록의 위치가 달라(`data`, `models`, `data.data`, 배열 루트 등)
+ * 얕은 깊이까지 재귀 탐색하며, 원소에서 모델 ID를 뽑을 수 있는 배열만 인정함.
+ *
+ * @param {*} value - 탐색 대상 값(응답 본문 또는 그 하위 값).
+ * @param {number} [depth] - 현재 탐색 깊이.
+ * @returns {Array|null} 모델 목록 배열. 찾지 못하면 null.
+ */
+function findModelArray(value, depth = 0) {
+  if (Array.isArray(value)) {
+    return value.length === 0 || toModelId(value[0]) ? value : null;
+  }
+  if (!value || typeof value !== "object" || depth >= 3) return null;
+  for (const child of Object.values(value)) {
+    const found = findModelArray(child, depth + 1);
+    if (found) return found;
+  }
+  return null;
+}
+
+/**
+ * 모델 목록 API를 한 번 호출해 정렬된 모델 ID 배열과 원문 응답을 반환함.
+ *
+ * @param {string} endpoint - 모델 목록 엔드포인트 URL.
+ * @param {Record<string, string>} headers - 요청 헤더.
+ * @returns {Promise<{raw: string, models: string[]}>} 원문 응답과 모델 ID 배열.
+ */
+async function fetchModelList(endpoint, headers) {
+  const response = await fetch(endpoint, { headers });
+  if (!response.ok) {
+    throw new Error(`모델 목록 요청 실패 (HTTP ${response.status})`);
+  }
+
+  const raw = await response.text();
+  let data;
+  try {
+    data = JSON.parse(raw);
+  } catch {
+    throw new Error(`모델 목록 응답이 JSON이 아닙니다. (앞부분: ${raw.slice(0, 120)})`);
+  }
+
+  const models = [...new Set(
+    (findModelArray(data) ?? []).map(toModelId).filter((modelId) => modelId.length > 0),
+  )].sort((left, right) => left.localeCompare(right));
+  return { raw, models };
+}
+
+/**
  * 선택 프로바이더의 모델 목록 API를 호출해 모델 ID 배열을 반환함.
  *
  * @param {string} provider - 조회할 프로바이더 키.
@@ -245,20 +313,8 @@ async function requestModels(provider, apiKey) {
   const headers = provider === "gemini"
     ? { "x-goog-api-key": apiKey }
     : { Authorization: `Bearer ${apiKey}` };
-  const response = await fetch(meta.modelsEndpoint, { headers });
-  if (!response.ok) {
-    throw new Error(`모델 목록 요청 실패 (HTTP ${response.status})`);
-  }
-
-  const data = await response.json();
-  const rawModels = provider === "gemini" ? data?.models : data?.data;
-  if (!Array.isArray(rawModels)) throw new Error("모델 목록 응답 형식이 올바르지 않습니다.");
-
-  return [...new Set(
-    rawModels
-      .map((item) => item?.id || item?.name?.replace(/^models\//, ""))
-      .filter((modelId) => typeof modelId === "string" && modelId.length > 0),
-  )].sort((left, right) => left.localeCompare(right));
+  const { models } = await fetchModelList(meta.modelsEndpoint, headers);
+  return models;
 }
 
 /** 모델 목록을 조회해 직접 입력란에 연결된 후보 목록으로 표시함. */
@@ -536,5 +592,6 @@ els.save.addEventListener("click", async () => {
 window.addEventListener("pagehide", flushAutoSave);
 
 // 초기화: 설정 로드 후 현재 탭의 번역 상태를 반영함.
+els.appVersion.textContent = `v${chrome.runtime.getManifest().version}`;
 loadSettings();
 refreshStatus();

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "AI 페이지 번역기",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "현재 페이지를 원본 언어와 무관하게 한국어로 번역합니다. 아이콘 클릭으로 동작하며 스크롤 시 새로 나타난 내용도 자동으로 번역합니다.",
   "icons": {
     "16": "icons/icon16.png",
@@ -15,6 +15,7 @@
     "https://openrouter.ai/*",
     "https://nano-gpt.com/*",
     "https://api.runware.ai/*",
+    "https://llm.drasys.com/*",
     "https://api2.laozhang.ai/*",
     "https://generativelanguage.googleapis.com/*"
   ],

@@ -52,6 +52,18 @@ body {
   font-size: 16px;
 }
 
+.app-version {
+  margin-left: auto;
+  align-self: flex-start;
+  padding: 2px 6px;
+  border-radius: 6px;
+  background: rgba(127, 127, 127, 0.15);
+  color: var(--muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
 .primary-button {
   width: 100%;
   padding: 12px;

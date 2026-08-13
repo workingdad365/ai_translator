@@ -16,4 +16,8 @@ export const translateSegments = createTranslator({
   // OpenAI 프로토콜을 그대로 따르는 엔드포인트이므로 표준 reasoning_effort 를 전송함.
   // 모델이 거부하면 공통 팩토리가 지원 값으로 자동 폴백함.
   reasoningParam: (effort) => ({ reasoning_effort: effort }),
+  // Runware 는 response_format 을 보내면 스키마를 요구해
+  // 400 `Missing required parameter: 'jsonSchema'` 를 반환하므로 필드를 아예 생략함.
+  // JSON 출력은 시스템 프롬프트 지시만으로 유도함.
+  supportsResponseFormat: false,
 });
