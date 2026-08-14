@@ -111,6 +111,8 @@ const els = {
   showProgressToast: document.getElementById("show-progress-toast"),
   translate: document.getElementById("translate-button"),
   save: document.getElementById("save-button"),
+  speedTest: document.getElementById("speed-test-button"),
+  speedNotice: document.getElementById("speed-notice"),
   settings: document.getElementById("settings"),
   notice: document.getElementById("notice"),
   saveNotice: document.getElementById("save-notice"),
@@ -538,6 +540,80 @@ async function stopTranslation() {
   notify(els.notice, "번역을 중지했습니다. 더 이상 번역하지 않습니다.", "success");
 }
 
+/**
+ * 속도 측정 결과를 사람이 읽을 수 있는 문구로 변환함.
+ *
+ * tps 는 프로바이더가 usage 로 알려준 실측 출력 토큰 수에서만 계산함.
+ * usage 를 주지 않는 프로바이더에서는 추정치를 만들지 않고, 대신 초당 처리한
+ * 문자 수를 표시함.
+ *
+ * @param {{elapsedMs: number, segmentCount: number, inputChars: number, outputChars: number, model: string, usage: {inputTokens: number|null, outputTokens: number|null, totalTokens: number|null}|null}} result
+ *   백그라운드가 반환한 측정 결과.
+ * @returns {string} 표시할 결과 문구(줄바꿈 포함).
+ */
+function formatSpeedResult(result) {
+  const seconds = result.elapsedMs / 1000;
+  const lines = [];
+  const usage = result.usage;
+
+  if (usage?.outputTokens > 0) {
+    lines.push(`출력 ${(usage.outputTokens / seconds).toFixed(1)} tok/s (생성 토큰 기준)`);
+  }
+  if (usage?.totalTokens > 0) {
+    lines.push(`전체 ${(usage.totalTokens / seconds).toFixed(1)} tok/s (입력+출력 토큰 기준)`);
+  }
+  if (!usage || (!usage.outputTokens && !usage.totalTokens)) {
+    lines.push("이 프로바이더는 토큰 사용량을 반환하지 않아 tok/s 를 계산할 수 없습니다.");
+    lines.push(`출력 ${(result.outputChars / seconds).toFixed(0)} 자/s`);
+  }
+
+  lines.push(`소요 ${seconds.toFixed(1)}초 · 모델 ${result.model}`);
+  lines.push(
+    `예문 ${result.segmentCount}줄 / ${result.inputChars.toLocaleString()}자 → 번역 ${result.outputChars.toLocaleString()}자`,
+  );
+  if (usage) {
+    lines.push(
+      `토큰 입력 ${usage.inputTokens ?? "?"} / 출력 ${usage.outputTokens ?? "?"} / 합계 ${usage.totalTokens ?? "?"}`,
+    );
+  }
+  return lines.join("\n");
+}
+
+/**
+ * 동봉된 예문을 한 번 번역시켜 처리 속도를 측정하고 결과를 표시함.
+ * 측정 중 팝업을 닫으면 응답을 받지 못하므로 안내 문구로 알림.
+ */
+async function runSpeedTest() {
+  const cfg = await saveSettings();
+  if (!cfg.apiKey) {
+    notify(els.speedNotice, "API 키를 먼저 입력하세요.", "error");
+    return;
+  }
+  if (!cfg.model) {
+    notify(els.speedNotice, "모델명을 먼저 입력하세요.", "error");
+    return;
+  }
+
+  els.speedTest.disabled = true;
+  els.speedTest.textContent = "측정 중...";
+  notify(els.speedNotice, "예문을 번역하며 측정 중입니다. 팝업을 닫지 마세요.");
+
+  try {
+    const result = await chrome.runtime.sendMessage({ type: "speed-test" });
+    if (!result) throw new Error("백그라운드에서 응답이 없습니다.");
+    if (result.error) {
+      notify(els.speedNotice, result.error, "error");
+      return;
+    }
+    notify(els.speedNotice, formatSpeedResult(result), "success");
+  } catch (error) {
+    notify(els.speedNotice, error.message || "속도 측정에 실패했습니다.", "error");
+  } finally {
+    els.speedTest.disabled = false;
+    els.speedTest.textContent = "속도 측정";
+  }
+}
+
 // 버튼은 현재 모드에 따라 시작 또는 중지로 동작함.
 els.translate.addEventListener("click", () => {
   if (translating) {
@@ -588,6 +664,8 @@ els.save.addEventListener("click", async () => {
   await saveSettings();
   notify(els.saveNotice, "설정을 저장했습니다.", "success");
 });
+
+els.speedTest.addEventListener("click", runSpeedTest);
 
 window.addEventListener("pagehide", flushAutoSave);
 

@@ -226,6 +226,12 @@ body {
   color: var(--success);
 }
 
+/* 속도 측정 결과는 여러 줄이므로 줄바꿈을 보존해 표시함. */
+#speed-notice {
+  white-space: pre-line;
+  line-height: 1.6;
+}
+
 .field input:focus,
 .field select:focus,
 .field textarea:focus {

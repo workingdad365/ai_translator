@@ -2,6 +2,7 @@
 // Google Gemini Interactions API를 REST로 직접 호출해 텍스트 세그먼트를 번역함.
 
 import {
+  attachUsage,
   buildSystemPrompt,
   computeMaxTokens,
   parseTranslationResponse,
@@ -275,10 +276,13 @@ async function attemptTranslate({
     },
   );
 
-  return parseTranslationResponse(content, segments, {
-    debug,
-    where: "Gemini/translateSegments",
-  });
+  return attachUsage(
+    parseTranslationResponse(content, segments, {
+      debug,
+      where: "Gemini/translateSegments",
+    }),
+    data?.usage,
+  );
 }
 
 /**

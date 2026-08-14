@@ -162,11 +162,108 @@ async function handleTranslate(segments) {
   }
 }
 
+// 속도 측정용 예문 파일(확장 패키지에 동봉). 팝업의 "속도 측정" 버튼이 사용함.
+const SPEED_TEST_FILE = "speed_test.txt";
+// 속도 측정은 예문 전체를 한 번의 요청으로 보내므로 일반 배치보다 오래 걸림.
+// 사용자의 타임아웃 설정이 짧아 측정 자체가 실패하는 것을 막기 위한 하한.
+const SPEED_TEST_MIN_TIMEOUT_MS = 180000;
+
+/**
+ * 속도 측정용 예문을 읽어 줄 단위 세그먼트 배열로 변환함.
+ *
+ * 실제 번역과 동일하게 블록 단위(문단/제목)로 나눠 보내기 위해 빈 줄을 제외한
+ * 각 줄을 하나의 세그먼트로 취급함.
+ *
+ * @returns {Promise<string[]>} 번역할 세그먼트 배열.
+ * @throws {Error} 예문 파일을 읽지 못했을 때.
+ */
+async function loadSpeedTestSegments() {
+  const response = await fetch(chrome.runtime.getURL(SPEED_TEST_FILE));
+  if (!response.ok) {
+    throw new Error(`속도 측정용 예문을 읽지 못했습니다. (HTTP ${response.status})`);
+  }
+  const text = await response.text();
+  return text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+}
+
+/**
+ * 동봉된 예문을 한 번의 요청으로 번역해 처리 속도를 측정함.
+ *
+ * 측정의 일관성을 위해 배치 분할과 동시 실행을 쓰지 않고 단일 요청으로 보냄.
+ * 토큰 수는 프로바이더가 반환한 usage 값을 그대로 사용하며, usage 를 제공하지
+ * 않는 프로바이더에서는 null 로 반환해 팝업이 tps 대신 다른 지표를 표시하게 함.
+ *
+ * @returns {Promise<{provider?: string, model?: string, elapsedMs?: number, segmentCount?: number, inputChars?: number, outputChars?: number, usage?: object|null, error?: string}>}
+ *   측정 결과 또는 오류 정보.
+ */
+async function handleSpeedTest() {
+  const {
+    provider,
+    apiKey,
+    model,
+    providerSlug,
+    tone,
+    glossary,
+    reasoningEffort,
+    timeoutMs,
+    debug,
+  } = await getSettings();
+
+  if (!apiKey) return { error: "API 키가 설정되지 않았습니다." };
+  if (!model) return { error: "모델이 설정되지 않았습니다." };
+
+  const translate = PROVIDERS[provider];
+  if (!translate) return { error: `지원하지 않는 프로바이더입니다: ${provider}` };
+
+  let segments;
+  try {
+    segments = await loadSpeedTestSegments();
+  } catch (err) {
+    return { error: err.message };
+  }
+  if (segments.length === 0) return { error: "속도 측정용 예문이 비어 있습니다." };
+
+  const inputChars = segments.reduce((total, segment) => total + segment.length, 0);
+  const startedAt = Date.now();
+
+  try {
+    const translations = await translate({
+      apiKey,
+      model,
+      providerSlug,
+      segments,
+      tone,
+      glossary,
+      reasoningEffort,
+      timeoutMs: Math.max(timeoutMs, SPEED_TEST_MIN_TIMEOUT_MS),
+      debug,
+    });
+    return {
+      provider,
+      model,
+      elapsedMs: Date.now() - startedAt,
+      segmentCount: segments.length,
+      inputChars,
+      outputChars: translations.reduce((total, text) => total + (text?.length || 0), 0),
+      usage: translations.usage || null,
+    };
+  } catch (err) {
+    return { error: err.message };
+  }
+}
+
 // 콘텐츠 스크립트로부터의 메시지 처리.
 // sendResponse 를 비동기로 호출하므로 리스너에서 true 를 반환해야 함.
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message?.type === "translate-batch") {
     handleTranslate(message.segments).then(sendResponse);
+    return true;
+  }
+  if (message?.type === "speed-test") {
+    handleSpeedTest().then(sendResponse);
     return true;
   }
   return false;

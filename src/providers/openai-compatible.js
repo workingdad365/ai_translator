@@ -154,6 +154,61 @@ export function buildSystemPrompt({ tone, glossary }) {
 }
 
 /**
+ * 프로바이더별 usage 응답을 공통 형태로 정규화함.
+ *
+ * OpenAI 호환(`prompt_tokens`/`completion_tokens`)과 Gemini Interactions
+ * (`total_input_tokens`/`total_output_tokens`) 등 필드명이 달라 흡수함.
+ * 유효한 수치가 하나도 없으면 null 을 반환함(추정값을 만들지 않음).
+ *
+ * @param {*} usage - 응답 본문의 usage 객체.
+ * @returns {{inputTokens: number|null, outputTokens: number|null, totalTokens: number|null}|null}
+ *   정규화된 토큰 사용량 또는 null.
+ */
+function normalizeUsage(usage) {
+  if (!usage || typeof usage !== "object") return null;
+
+  const pick = (...values) => {
+    for (const value of values) {
+      const n = Number(value);
+      if (Number.isFinite(n) && n >= 0) return n;
+    }
+    return null;
+  };
+
+  const inputTokens = pick(usage.prompt_tokens, usage.input_tokens, usage.total_input_tokens);
+  const outputTokens = pick(
+    usage.completion_tokens,
+    usage.output_tokens,
+    usage.total_output_tokens,
+  );
+  const totalTokens =
+    pick(usage.total_tokens) ??
+    (inputTokens !== null && outputTokens !== null ? inputTokens + outputTokens : null);
+
+  if (inputTokens === null && outputTokens === null && totalTokens === null) return null;
+  return { inputTokens, outputTokens, totalTokens };
+}
+
+/**
+ * 번역 결과 배열에 정규화한 토큰 사용량을 부가 속성으로 붙임(속도 측정용).
+ * 열거 불가 속성으로 두어 배열 자체를 다루는 기존 로직(순회/비교/직렬화)에는
+ * 영향을 주지 않게 함.
+ *
+ * @param {string[]} translations - 번역 결과 배열.
+ * @param {*} usage - 응답 본문의 usage 객체.
+ * @returns {string[]} 입력받은 배열(usage 속성 부착).
+ */
+export function attachUsage(translations, usage) {
+  Object.defineProperty(translations, "usage", {
+    value: normalizeUsage(usage),
+    enumerable: false,
+    writable: true,
+    configurable: true,
+  });
+  return translations;
+}
+
+/**
  * 오류 응답 본문을 안전하게 읽음. 본문 파싱 실패 시 빈 문자열을 반환함.
  *
  * @param {Response} res - fetch 응답 객체.
@@ -720,7 +775,7 @@ async function attemptTranslate({ endpoint, headers, bodyStr, label, debug, wher
     cachedTokens: data?.usage?.prompt_tokens_details?.cached_tokens,
   });
 
-  return parseTranslationResponse(content, segments, { debug, where });
+  return attachUsage(parseTranslationResponse(content, segments, { debug, where }), data?.usage);
 }
 
 /**
