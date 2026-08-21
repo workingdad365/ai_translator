@@ -114,6 +114,9 @@ const els = {
   speedTest: document.getElementById("speed-test-button"),
   speedNotice: document.getElementById("speed-notice"),
   settings: document.getElementById("settings"),
+  currentSelection: document.getElementById("current-selection"),
+  currentProvider: document.getElementById("current-provider"),
+  currentModel: document.getElementById("current-model"),
   notice: document.getElementById("notice"),
   saveNotice: document.getElementById("save-notice"),
   appVersion: document.getElementById("app-version"),
@@ -208,6 +211,20 @@ function renderButton() {
 }
 
 /**
+ * 현재 선택된 AI 서비스와 모델을 번역 버튼 아래 요약 영역에 표시함.
+ * 서비스 이름은 선택 목록의 표기를 그대로 쓰되, 좁은 팝업 폭을 고려해
+ * 괄호 설명(예: "(자체 프록시)")은 떼어 냄.
+ */
+function renderCurrentSelection() {
+  const label = els.provider.selectedOptions[0]?.textContent.trim() || els.provider.value;
+  const model = els.model.value.trim();
+
+  els.currentProvider.textContent = label.replace(/\s*\([^()]*\)\s*$/, "");
+  els.currentModel.textContent = model || "모델 미설정";
+  els.currentSelection.dataset.state = model ? "ok" : "empty";
+}
+
+/**
  * 현재 활성 탭을 반환함.
  *
  * @returns {Promise<chrome.tabs.Tab|undefined>} 활성 탭 또는 undefined.
@@ -232,6 +249,8 @@ function fillCredentialFields(provider) {
   const meta = PROVIDER_META[provider] || PROVIDER_META[DEFAULT_PROVIDER];
   els.apiKey.placeholder = meta.apiKeyHint;
   els.model.placeholder = meta.modelHint;
+
+  renderCurrentSelection();
 }
 
 /** 조회된 모델 후보와 조회 상태를 초기화함. */
@@ -632,6 +651,10 @@ els.provider.addEventListener("change", () => {
   clearModelOptions();
   scheduleAutoSave();
 });
+
+// 모델을 직접 입력/선택하면 요약 표시도 즉시 갱신함.
+els.model.addEventListener("input", renderCurrentSelection);
+els.model.addEventListener("change", renderCurrentSelection);
 
 els.fetchModels.addEventListener("click", fetchModelOptions);
 
