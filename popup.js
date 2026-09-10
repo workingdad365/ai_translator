@@ -90,6 +90,8 @@ const STORAGE_DEFAULTS = {
 let credentials = {};
 // 현재 폼에 표시 중인 프로바이더(전환 시 이전 입력값 보존에 사용).
 let shownProvider = DEFAULT_PROVIDER;
+let openrouterModelReasoning = {};
+let lastReasoningSelection = "";
 
 const els = {
   provider: document.getElementById("provider"),
@@ -259,6 +261,56 @@ function clearModelOptions() {
   notify(els.modelNotice, "");
 }
 
+function updateModelReasoning(reset = false, previous = els.reasoningEffort.value) {
+  const model = els.model.value.trim();
+  const selection = `${els.provider.value}:${model}`;
+  const isOpenRouter = els.provider.value === "openrouter";
+  const known = Object.hasOwn(openrouterModelReasoning, model);
+  const reasoning = isOpenRouter && known ? openrouterModelReasoning[model] : null;
+  const supported = reasoning?.supported_efforts;
+  const efforts = ["minimal", "low", "medium", "high", "xhigh", "max"];
+  let automatic = "none";
+  if (!known || (reasoning && reasoning.mandatory !== false)) {
+    automatic = reasoning?.mandatory === true
+      ? supported === null
+        ? "minimal"
+        : efforts.find((effort) => Array.isArray(supported) && supported.includes(effort)) || "default"
+      : "default";
+  }
+
+  for (const option of [...els.reasoningEffort.options]) {
+    if (option.dataset.modelReasoning) option.remove();
+  }
+  if (isOpenRouter && Array.isArray(supported)) {
+    const labels = { medium: "보통", high: "높음", xhigh: "매우 높음", max: "최대" };
+    for (const [effort, label] of Object.entries(labels)) {
+      if (!supported.includes(effort)) continue;
+      const option = document.createElement("option");
+      option.value = effort;
+      option.textContent = label;
+      option.dataset.modelReasoning = "true";
+      els.reasoningEffort.append(option);
+    }
+  }
+  for (const option of els.reasoningEffort.options) {
+    option.disabled = isOpenRouter && (option.value === "none"
+      ? reasoning?.mandatory === true
+      : option.value !== "default" && Array.isArray(supported) && !supported.includes(option.value));
+  }
+  const previousAllowed = [...els.reasoningEffort.options]
+    .some((option) => option.value === previous && !option.disabled);
+  els.reasoningEffort.value = isOpenRouter && (reset || selection !== lastReasoningSelection || !previousAllowed)
+    ? automatic
+    : previousAllowed ? previous : "default";
+  lastReasoningSelection = selection;
+}
+
+function handleModelChange() {
+  renderCurrentSelection();
+  updateModelReasoning();
+  scheduleAutoSave();
+}
+
 /**
  * 모델 항목에서 모델 ID 문자열을 추출함. 프로바이더마다 필드명이 달라 순서대로 탐색함.
  *
@@ -298,7 +350,7 @@ function findModelArray(value, depth = 0) {
  *
  * @param {string} endpoint - 모델 목록 엔드포인트 URL.
  * @param {Record<string, string>} headers - 요청 헤더.
- * @returns {Promise<{raw: string, models: string[]}>} 원문 응답과 모델 ID 배열.
+ * @returns {Promise<{raw: string, models: string[], reasoningByModel: object}>} 원문 응답과 모델 정보.
  */
 async function fetchModelList(endpoint, headers) {
   const response = await fetch(endpoint, { headers });
@@ -314,10 +366,14 @@ async function fetchModelList(endpoint, headers) {
     throw new Error(`모델 목록 응답이 JSON이 아닙니다. (앞부분: ${raw.slice(0, 120)})`);
   }
 
+  const items = findModelArray(data) ?? [];
   const models = [...new Set(
-    (findModelArray(data) ?? []).map(toModelId).filter((modelId) => modelId.length > 0),
+    items.map(toModelId).filter((modelId) => modelId.length > 0),
   )].sort((left, right) => left.localeCompare(right));
-  return { raw, models };
+  const reasoningByModel = Object.fromEntries(items
+    .filter((item) => toModelId(item))
+    .map((item) => [toModelId(item), item?.reasoning ?? null]));
+  return { raw, models, reasoningByModel };
 }
 
 /**
@@ -325,7 +381,7 @@ async function fetchModelList(endpoint, headers) {
  *
  * @param {string} provider - 조회할 프로바이더 키.
  * @param {string} apiKey - 모델 목록 조회에 사용할 API 키.
- * @returns {Promise<string[]>} 중복을 제거하고 이름순으로 정렬한 모델 ID 배열.
+ * @returns {Promise<{raw: string, models: string[], reasoningByModel: object}>} 정렬된 모델 목록과 메타데이터.
  */
 async function requestModels(provider, apiKey) {
   const meta = PROVIDER_META[provider];
@@ -334,8 +390,7 @@ async function requestModels(provider, apiKey) {
   const headers = provider === "gemini"
     ? { "x-goog-api-key": apiKey }
     : { Authorization: `Bearer ${apiKey}` };
-  const { models } = await fetchModelList(meta.modelsEndpoint, headers);
-  return models;
+  return fetchModelList(meta.modelsEndpoint, headers);
 }
 
 /** 모델 목록을 조회해 직접 입력란에 연결된 후보 목록으로 표시함. */
@@ -353,7 +408,14 @@ async function fetchModelOptions() {
   notify(els.modelNotice, "모델 목록을 조회하고 있습니다.");
 
   try {
-    const models = await requestModels(provider, apiKey);
+    const { models, reasoningByModel } = await requestModels(provider, apiKey);
+    if (provider === "openrouter") {
+      await chrome.storage.local.set({ openrouterModelReasoning: reasoningByModel });
+      openrouterModelReasoning = reasoningByModel;
+    }
+    if (els.provider.value !== provider || els.apiKey.value.trim() !== apiKey) return;
+    updateModelReasoning(true);
+    scheduleAutoSave();
     els.modelList.replaceChildren(
       ...models.map((modelId) => {
         const option = document.createElement("option");
@@ -391,11 +453,13 @@ function captureShownCredentials() {
 
 /** 저장소의 설정값을 입력 폼에 반영함. */
 async function loadSettings() {
-  const cfg = await chrome.storage.local.get(STORAGE_DEFAULTS);
+  const cfg = await chrome.storage.local.get({ ...STORAGE_DEFAULTS, openrouterModelReasoning: {} });
   const provider = AVAILABLE_PROVIDERS.has(cfg.provider) ? cfg.provider : DEFAULT_PROVIDER;
 
   credentials =
     cfg.credentials && typeof cfg.credentials === "object" ? { ...cfg.credentials } : {};
+  openrouterModelReasoning = cfg.openrouterModelReasoning && typeof cfg.openrouterModelReasoning === "object"
+    ? cfg.openrouterModelReasoning : {};
 
   // 레거시(단일 apiKey/model) 저장 형식을 openai 자격증명으로 이관함.
   if (!credentials.openai && (cfg.apiKey || cfg.model)) {
@@ -415,6 +479,9 @@ async function loadSettings() {
 
   shownProvider = provider;
   fillCredentialFields(provider);
+  lastReasoningSelection = `${provider}:${els.model.value.trim()}`;
+  updateModelReasoning(false, cfg.reasoningEffort);
+  if (els.reasoningEffort.value !== cfg.reasoningEffort) scheduleAutoSave();
 
   // 선택 프로바이더의 키/모델이 비어 있으면 설정 영역을 펼쳐 입력을 유도함.
   const cred = credentials[provider] || {};
@@ -649,12 +716,13 @@ els.provider.addEventListener("change", () => {
   shownProvider = els.provider.value;
   fillCredentialFields(shownProvider);
   clearModelOptions();
+  updateModelReasoning(true);
   scheduleAutoSave();
 });
 
 // 모델을 직접 입력/선택하면 요약 표시도 즉시 갱신함.
-els.model.addEventListener("input", renderCurrentSelection);
-els.model.addEventListener("change", renderCurrentSelection);
+els.model.addEventListener("input", handleModelChange);
+els.model.addEventListener("change", handleModelChange);
 
 els.fetchModels.addEventListener("click", fetchModelOptions);
 
