@@ -305,9 +305,15 @@ function updateModelReasoning(reset = false, previous = els.reasoningEffort.valu
   lastReasoningSelection = selection;
 }
 
-function handleModelChange() {
+function handleModelChange(event) {
   renderCurrentSelection();
-  updateModelReasoning();
+  const model = els.model.value.trim();
+  const selection = `${els.provider.value}:${model}`;
+  if (selection !== lastReasoningSelection &&
+      (event.type === "change" ||
+       (els.provider.value === "openrouter" && Object.hasOwn(openrouterModelReasoning, model)))) {
+    updateModelReasoning();
+  }
   scheduleAutoSave();
 }
 
@@ -518,6 +524,9 @@ async function refreshStatus() {
  *   선택된 프로바이더의 검증용 설정값(번역 시작 전 필수값 확인에 사용).
  */
 async function saveSettings(updateForm = true) {
+  if (updateForm && `${els.provider.value}:${els.model.value.trim()}` !== lastReasoningSelection) {
+    updateModelReasoning();
+  }
   captureShownCredentials();
   const provider = els.provider.value;
 

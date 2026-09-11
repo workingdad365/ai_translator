@@ -68,7 +68,7 @@ async function createPopup(stored = {}, items = []) {
     async emit(id, type, value) {
       const element = document.getElementById(id);
       element.value = value;
-      for (const listener of element.listeners[type] ?? []) await listener();
+      for (const listener of element.listeners[type] ?? []) await listener({ type, target: element });
     },
     async flush() { if (pendingSave) await pendingSave(); },
   };
@@ -100,7 +100,7 @@ test("OpenRouter 모델 선택 시 없음 또는 지원하는 최저 추론 강�
     ["unrestricted", "minimal"], ["budgetOnly", "default"],
     ["unknown", "default"], ["optional", "none"], ["plain", "none"],
   ]) {
-    await popup.emit("model", "input", model);
+    await popup.emit("model", model === "unknown" ? "change" : "input", model);
     assert.equal(popup.select.value, expected, model);
     assert.ok(popup.select.options.some((option) => option.value === expected && !option.disabled));
     await popup.flush();
@@ -169,4 +169,36 @@ test("모델 조회 도중 서비스를 바꾸면 늦은 응답이 현재 선택
   await request;
   assert.equal(popup.element("model-list").options.length, 0);
   assert.equal(popup.element("provider").value, "openai");
+});
+
+test("부분 검색 중에는 콤보박스를 다시 만들지 않고 모델 선택 시에만 추론을 갱신한다", async () => {
+  const popup = await createPopup(settings(), Object.entries(modelReasoning)
+    .map(([id, reasoning]) => ({ id, reasoning })));
+  await popup.run("fetchModelOptions()");
+  const candidates = [...popup.element("model-list").options];
+  const reasoningOptions = [...popup.select.options];
+  for (const value of ["", "r", "re", "req", "re", "l", "low"]) {
+    await popup.emit("model", "input", value);
+    await popup.flush();
+    assert.equal(popup.select.value, "none");
+    assert.deepEqual(popup.select.options, reasoningOptions);
+    assert.deepEqual(popup.element("model-list").options, candidates);
+    assert.equal(popup.element("model").value, value);
+  }
+  await popup.emit("model", "input", "lowOnly");
+  assert.equal(popup.select.value, "low");
+  const selectedOptions = [...popup.select.options];
+  await popup.emit("model", "change", "lowOnly");
+  assert.deepEqual(popup.select.options, selectedOptions);
+});
+
+test("미조회 모델은 입력 확정이나 번역 직전 저장 시 기본값으로 보정한다", async () => {
+  const popup = await createPopup(settings());
+  await popup.emit("model", "input", "custom-model");
+  assert.equal(popup.select.value, "none");
+  await popup.run("saveSettings()");
+  assert.equal(popup.storage.reasoningEffort, "default");
+  await popup.emit("model", "input", "required");
+  await popup.emit("model", "change", "another-custom-model");
+  assert.equal(popup.select.value, "default");
 });
