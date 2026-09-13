@@ -67,8 +67,10 @@
 
         <label id="openrouter-provider-field" class="field" hidden>
           <span>OpenRouter 실행 제공자 (Provider slug, 선택)</span>
-          <input id="openrouter-provider" type="text" autocomplete="off"
+          <input id="openrouter-provider" type="text" list="openrouter-provider-list" autocomplete="off"
                  spellcheck="false" placeholder="예: groq 또는 google-vertex/us-east5">
+          <datalist id="openrouter-provider-list"></datalist>
+          <span id="openrouter-provider-notice" class="field-notice" role="status" aria-live="polite"></span>
         </label>
 
         <label class="field">

@@ -5,7 +5,7 @@ import vm from "node:vm";
 
 const source = await readFile(new URL("../popup.js", import.meta.url), "utf8");
 
-async function createPopup(stored = {}, items = []) {
+async function createPopup(stored = {}, items = [], endpointFetch = async () => ({ ok: true, json: async () => ({ data: { endpoints: [] } }) })) {
   const elements = new Map();
   function createElement() {
     return {
@@ -45,6 +45,7 @@ async function createPopup(stored = {}, items = []) {
   const storage = structuredClone(stored);
   let pendingSave;
   const context = vm.createContext({
+    AbortSignal,
     document,
     window: { addEventListener() {} },
     chrome: {
@@ -57,7 +58,9 @@ async function createPopup(stored = {}, items = []) {
     },
     setTimeout(callback) { pendingSave = callback; return 1; },
     clearTimeout() { pendingSave = null; },
-    fetch: async () => ({ ok: true, text: async () => JSON.stringify({ data: items }) }),
+    fetch: async (url, options) => url.endsWith("/endpoints")
+      ? endpointFetch(url, options)
+      : { ok: true, text: async () => JSON.stringify({ data: items }) },
   });
   vm.runInContext(source, context);
   await new Promise((resolve) => setImmediate(resolve));
@@ -201,4 +204,130 @@ test("미조회 모델은 입력 확정이나 번역 직전 저장 시 기본값
   await popup.emit("model", "input", "required");
   await popup.emit("model", "change", "another-custom-model");
   assert.equal(popup.select.value, "default");
+});
+
+const providerModels = ["test/multi", "test/single", "test/empty"].map((id) => ({
+  id, reasoning: { mandatory: false },
+}));
+const providerEndpoints = {
+  multi: [
+    { tag: "deepinfra/turbo", provider_name: "DeepInfra", status: 0 },
+    { tag: "groq", provider_name: "Groq", status: 0 },
+    { tag: "groq", provider_name: "Groq", status: 0 },
+    { tag: "offline", provider_name: "Offline", status: -1 },
+    { provider_name: "Missing tag", status: 0 },
+  ],
+  single: [{ tag: "groq", provider_name: "Groq", status: 0 }],
+  empty: [],
+};
+
+function endpointResponse(endpoints) {
+  return { ok: true, json: async () => ({ data: { endpoints } }) };
+}
+
+async function createProviderPopup(endpointFetch, stored = {}) {
+  return createPopup(settings({
+    credentials: { openrouter: { apiKey: "test-key", model: "" } },
+    openrouterModelReasoning: Object.fromEntries(providerModels.map((model) => [model.id, model.reasoning])),
+    ...stored,
+  }), providerModels, endpointFetch || (async (url) => endpointResponse(
+    providerEndpoints[url.split("/").at(-2)] ?? [],
+  )));
+}
+
+test("모델별 정상 실행 제공자를 식별자로 중복 제거하고 검색 후보에 표시한다", async () => {
+  const popup = await createProviderPopup();
+  await popup.emit("model", "input", "test/multi");
+  const list = popup.element("openrouter-provider-list");
+  assert.deepEqual(Array.from(list.options, (option) => [option.value, option.label]), [
+    ["deepinfra/turbo", "DeepInfra"], ["groq", "Groq"],
+  ]);
+  const options = [...list.options];
+  for (const value of ["d", "deep", "deepinfra/turbo"]) {
+    await popup.emit("openrouter-provider", "input", value);
+    assert.equal(popup.element("openrouter-provider").value, value);
+    assert.deepEqual(list.options, options);
+  }
+  await popup.flush();
+  assert.equal(popup.storage.credentials.openrouter.providerSlug, "deepinfra/turbo");
+  assert.equal(popup.element("openrouter-provider").disabled, false);
+});
+
+test("단일 실행 제공자는 자동 저장하고 제공자 입력만 잠그며 모델 전환 시 해제한다", async () => {
+  const popup = await createProviderPopup();
+  await popup.emit("model", "input", "test/single");
+  assert.equal(popup.element("openrouter-provider").value, "groq");
+  assert.equal(popup.element("openrouter-provider").disabled, true);
+  assert.notEqual(popup.element("model").disabled, true);
+  await popup.flush();
+  assert.equal(popup.storage.credentials.openrouter.providerSlug, "groq");
+  await popup.emit("model", "input", "test/multi");
+  assert.equal(popup.element("openrouter-provider").value, "");
+  assert.equal(popup.element("openrouter-provider").disabled, false);
+  await popup.emit("model", "input", "test/single");
+  await popup.emit("model", "input", "test/empty");
+  assert.equal(popup.element("openrouter-provider").value, "");
+  assert.equal(popup.element("openrouter-provider").disabled, false);
+  assert.equal(popup.element("openrouter-provider-list").options.length, 0);
+});
+
+test("모델 목록 새로고침과 팝업 재실행 시 실행 제공자를 조회하고 유효한 선택을 유지한다", async () => {
+  let calls = 0;
+  const popup = await createProviderPopup(async () => {
+    calls += 1;
+    return endpointResponse(providerEndpoints.multi);
+  }, { credentials: { openrouter: { apiKey: "test-key", model: "test/multi", providerSlug: "deepinfra" } } });
+  assert.equal(calls, 1);
+  assert.equal(popup.element("openrouter-provider").value, "deepinfra");
+  await popup.run("fetchModelOptions()");
+  assert.equal(calls, 2);
+  assert.equal(popup.element("model-list").options.length, 3);
+  await popup.emit("model", "change", "test/multi");
+  assert.equal(calls, 2);
+});
+
+test("부분 모델 검색은 요청하지 않으며 늦은 엔드포인트 응답을 무시한다", async () => {
+  let resolveFirst;
+  let calls = 0;
+  const popup = await createProviderPopup(async () => {
+    calls += 1;
+    return calls === 1 ? new Promise((resolve) => { resolveFirst = resolve; }) : endpointResponse(providerEndpoints.multi);
+  });
+  const first = popup.emit("model", "input", "test/single");
+  await popup.emit("model", "input", "test/m");
+  assert.equal(calls, 1);
+  await popup.emit("model", "input", "test/multi");
+  resolveFirst(endpointResponse(providerEndpoints.single));
+  await first;
+  assert.equal(popup.element("openrouter-provider").disabled, false);
+  assert.equal(popup.element("openrouter-provider-list").options.length, 2);
+  await popup.emit("provider", "change", "openai");
+  assert.equal(popup.element("openrouter-provider-list").options.length, 0);
+});
+
+test("실행 제공자 조회 실패 시 기존 수동 입력을 보존하며 다음 조회로 복구한다", async () => {
+  let fail = true;
+  const popup = await createProviderPopup(async () => fail
+    ? { ok: false, status: 503 }
+    : endpointResponse(providerEndpoints.single), {
+    credentials: { openrouter: { apiKey: "test-key", model: "test/single", providerSlug: "manual" } },
+  });
+  assert.equal(popup.element("openrouter-provider").value, "manual");
+  assert.equal(popup.element("openrouter-provider").disabled, false);
+  assert.match(popup.element("openrouter-provider-notice").textContent, /503/);
+  fail = false;
+  await popup.run("updateProviderOptions()");
+  assert.equal(popup.element("openrouter-provider").value, "groq");
+  assert.equal(popup.element("openrouter-provider").disabled, true);
+});
+
+test("번역 직전 저장은 진행 중인 엔드포인트 조회와 단일 제공자 선택을 기다린다", async () => {
+  let complete;
+  const popup = await createProviderPopup(() => new Promise((resolve) => { complete = resolve; }));
+  const selection = popup.emit("model", "input", "test/single");
+  const save = popup.run("saveSettings()");
+  complete(endpointResponse(providerEndpoints.single));
+  await selection;
+  await save;
+  assert.equal(popup.storage.credentials.openrouter.providerSlug, "groq");
 });

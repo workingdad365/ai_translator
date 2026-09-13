@@ -92,6 +92,8 @@ let credentials = {};
 let shownProvider = DEFAULT_PROVIDER;
 let openrouterModelReasoning = {};
 let lastReasoningSelection = "";
+let providerSelection = "";
+let providerRequest = null;
 
 const els = {
   provider: document.getElementById("provider"),
@@ -99,6 +101,8 @@ const els = {
   model: document.getElementById("model"),
   openrouterProviderField: document.getElementById("openrouter-provider-field"),
   openrouterProvider: document.getElementById("openrouter-provider"),
+  openrouterProviderList: document.getElementById("openrouter-provider-list"),
+  openrouterProviderNotice: document.getElementById("openrouter-provider-notice"),
   modelList: document.getElementById("model-list"),
   fetchModels: document.getElementById("fetch-models-button"),
   modelNotice: document.getElementById("model-notice"),
@@ -247,6 +251,11 @@ function fillCredentialFields(provider) {
   els.model.value = cred.model || "";
   els.openrouterProvider.value = provider === "openrouter" ? cred.providerSlug || "" : "";
   els.openrouterProviderField.hidden = provider !== "openrouter";
+  providerSelection = `${provider}:${els.model.value.trim()}`;
+  providerRequest = null;
+  els.openrouterProviderList.replaceChildren();
+  els.openrouterProvider.disabled = false;
+  notify(els.openrouterProviderNotice, "");
 
   const meta = PROVIDER_META[provider] || PROVIDER_META[DEFAULT_PROVIDER];
   els.apiKey.placeholder = meta.apiKeyHint;
@@ -305,6 +314,70 @@ function updateModelReasoning(reset = false, previous = els.reasoningEffort.valu
   lastReasoningSelection = selection;
 }
 
+function updateProviderOptions(fetchOptions = true, force = false) {
+  const provider = els.provider.value;
+  const model = els.model.value.trim();
+  const apiKey = els.apiKey.value.trim();
+  const selection = `${provider}:${model}`;
+  if (selection !== providerSelection || force || (providerRequest && providerRequest.apiKey !== apiKey)) {
+    if (selection !== providerSelection) els.openrouterProvider.value = "";
+    providerSelection = selection;
+    providerRequest = null;
+    els.openrouterProviderList.replaceChildren();
+    els.openrouterProvider.disabled = false;
+    notify(els.openrouterProviderNotice, "");
+  }
+  if (!fetchOptions || provider !== "openrouter" || !apiKey || !model.includes("/")) return;
+  if (providerRequest) return providerRequest.promise;
+
+  const request = { apiKey, promise: null };
+  providerRequest = request;
+  const isCurrent = () => providerRequest === request && els.provider.value === provider &&
+    els.model.value.trim() === model && els.apiKey.value.trim() === apiKey;
+  notify(els.openrouterProviderNotice, "실행 제공자 조회 중...");
+  request.promise = (async () => {
+    try {
+      const modelPath = model.split("/").map(encodeURIComponent).join("/");
+      const response = await fetch(`https://openrouter.ai/api/v1/models/${modelPath}/endpoints`, {
+        headers: { Authorization: `Bearer ${apiKey}` },
+        signal: AbortSignal.timeout(10000),
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const data = await response.json();
+      if (!Array.isArray(data?.data?.endpoints)) throw new Error("잘못된 엔드포인트 응답");
+      const providers = new Map();
+      for (const endpoint of data.data.endpoints) {
+        if (endpoint?.status !== 0 || typeof endpoint.tag !== "string" || !endpoint.tag.trim()) continue;
+        const slug = endpoint.tag.trim().toLowerCase();
+        providers.set(slug, typeof endpoint.provider_name === "string" ? endpoint.provider_name : slug);
+      }
+      if (!isCurrent()) return;
+      const slugs = [...providers.keys()].sort((left, right) => left.localeCompare(right));
+      els.openrouterProviderList.replaceChildren(...slugs.map((slug) => {
+        const option = document.createElement("option");
+        option.value = slug;
+        option.label = providers.get(slug);
+        return option;
+      }));
+      const previous = els.openrouterProvider.value.trim().toLowerCase();
+      const validPrevious = slugs.some((slug) => slug === previous || slug.startsWith(`${previous}/`));
+      els.openrouterProvider.value = slugs.length === 1 ? slugs[0] : validPrevious ? previous : "";
+      els.openrouterProvider.disabled = slugs.length === 1;
+      notify(els.openrouterProviderNotice,
+        slugs.length === 1 ? `${providers.get(slugs[0])} (단일 제공자)` :
+          slugs.length ? `${slugs.length}개 실행 제공자` : "사용 가능한 실행 제공자가 없습니다.",
+        slugs.length ? "success" : "info");
+      scheduleAutoSave();
+    } catch (error) {
+      if (!isCurrent()) return;
+      providerRequest = null;
+      els.openrouterProvider.disabled = false;
+      notify(els.openrouterProviderNotice, `실행 제공자 조회 실패 (${error.message})`, "error");
+    }
+  })();
+  return request.promise;
+}
+
 function handleModelChange(event) {
   renderCurrentSelection();
   const model = els.model.value.trim();
@@ -315,6 +388,7 @@ function handleModelChange(event) {
     updateModelReasoning();
   }
   scheduleAutoSave();
+  return updateProviderOptions(event.type === "change" || Object.hasOwn(openrouterModelReasoning, model));
 }
 
 /**
@@ -437,6 +511,7 @@ async function fetchModelOptions() {
       models.length > 0 ? "success" : "error",
     );
     if (models.length > 0) els.model.focus();
+    await updateProviderOptions(true, true);
   } catch (error) {
     notify(els.modelNotice, error.message || "모델 목록을 가져오지 못했습니다.", "error");
   } finally {
@@ -494,6 +569,7 @@ async function loadSettings() {
   if (!cred.apiKey || !cred.model) {
     els.settings.open = true;
   }
+  await updateProviderOptions();
 }
 
 /**
@@ -527,6 +603,7 @@ async function saveSettings(updateForm = true) {
   if (updateForm && `${els.provider.value}:${els.model.value.trim()}` !== lastReasoningSelection) {
     updateModelReasoning();
   }
+  if (updateForm) await updateProviderOptions();
   captureShownCredentials();
   const provider = els.provider.value;
 
@@ -727,6 +804,7 @@ els.provider.addEventListener("change", () => {
   clearModelOptions();
   updateModelReasoning(true);
   scheduleAutoSave();
+  return updateProviderOptions();
 });
 
 // 모델을 직접 입력/선택하면 요약 표시도 즉시 갱신함.
@@ -736,8 +814,11 @@ els.model.addEventListener("change", handleModelChange);
 els.fetchModels.addEventListener("click", fetchModelOptions);
 
 els.openrouterProvider.addEventListener("input", () => {
-  els.openrouterProvider.value = els.openrouterProvider.value.toLowerCase();
+  const normalized = els.openrouterProvider.value.toLowerCase();
+  if (els.openrouterProvider.value !== normalized) els.openrouterProvider.value = normalized;
 });
+els.openrouterProvider.addEventListener("change", scheduleAutoSave);
+els.apiKey.addEventListener("change", () => updateProviderOptions(true, true));
 
 for (const el of [
   els.apiKey,
