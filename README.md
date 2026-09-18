@@ -1,6 +1,16 @@
 # AI 페이지 번역기
 
-현재 보고 있는 웹 페이지를 원본 언어와 무관하게 **한국어로 번역**하는 Chrome 확장 프로그램(Manifest V3). LLM 프로바이더로 **OpenAI**, **OpenRouter**, **LiteLLM(자체 프록시)**, **Gemini**를 지원하며, 추후 다른 프로바이더로 확장할 수 있도록 설계함. OpenRouter/LiteLLM은 OpenAI 호환 Chat Completions API를, Gemini는 Google의 **Interactions API**를 사용함.
+현재 보고 있는 웹 페이지를 원본 언어와 무관하게 **한국어로 번역**하는 Chrome 확장 프로그램(Manifest V3). 
+
+LLM 프로바이더로 **OpenAI**, **OpenRouter**, **LiteLLM(자체 프록시)**, **Gemini**를 지원하며, 추후 다른 프로바이더로 확장할 수 있도록 설계함. 
+
+OpenRouter/LiteLLM은 OpenAI 호환 Chat Completions API를, Gemini는 Google의 **Interactions API**를 사용함.
+
+
+
+<img src="screenshot01.png" style="width: 30%;" />
+<img src="screenshot02.png" style="width: 30%;" />
+<img src="screenshot03.png" style="width: 30%;" />
 
 ## 주요 기능
 
