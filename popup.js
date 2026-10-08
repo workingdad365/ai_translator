@@ -9,6 +9,7 @@
 const DEFAULT_PROVIDER = "openai";
 const AVAILABLE_PROVIDERS = new Set([
   "openai",
+  "claude",
   "openrouter",
   "nanogpt",
   "runware",
@@ -19,6 +20,11 @@ const AVAILABLE_PROVIDERS = new Set([
 
 // 프로바이더별 입력 힌트(placeholder). 지원 프로바이더 추가 시 여기에 등록함.
 const PROVIDER_META = {
+  claude: {
+    apiKeyHint: "sk-ant-...",
+    modelHint: "예: claude-haiku-4-5",
+    modelsEndpoint: "https://api.anthropic.com/v1/models?limit=1000",
+  },
   openai: {
     apiKeyHint: "sk-...",
     modelHint: "예: gpt-5.4-mini",
@@ -466,6 +472,30 @@ async function fetchModelList(endpoint, headers) {
 async function requestModels(provider, apiKey) {
   const meta = PROVIDER_META[provider];
   if (!meta?.modelsEndpoint) throw new Error("이 프로바이더는 모델 조회를 지원하지 않습니다.");
+
+  if (provider === "claude") {
+    const headers = {
+      "x-api-key": apiKey,
+      "anthropic-version": "2023-06-01",
+      "anthropic-dangerous-direct-browser-access": "true",
+    };
+    let endpoint = meta.modelsEndpoint;
+    const models = new Set();
+    const cursors = new Set();
+    let page;
+    do {
+      page = await fetchModelList(endpoint, headers);
+      for (const model of page.models) models.add(model);
+      const data = JSON.parse(page.raw);
+      if (!data.has_more) break;
+      if (!data.last_id || cursors.has(data.last_id)) {
+        throw new Error("Claude 모델 목록의 다음 페이지 정보를 확인할 수 없습니다.");
+      }
+      cursors.add(data.last_id);
+      endpoint = `${meta.modelsEndpoint}&after_id=${encodeURIComponent(data.last_id)}`;
+    } while (true);
+    return { ...page, models: [...models].sort((left, right) => left.localeCompare(right)) };
+  }
 
   const headers = provider === "gemini"
     ? { "x-goog-api-key": apiKey }

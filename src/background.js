@@ -5,6 +5,7 @@
 //  2) API 키를 페이지 컨텍스트에 노출하지 않고 확장 프로그램 내부에만 유지함.
 
 import { translateSegments as openaiTranslate } from "./providers/openai.js";
+import { translateSegments as claudeTranslate } from "./providers/claude.js";
 import { translateSegments as openrouterTranslate } from "./providers/openrouter.js";
 import { translateSegments as nanogptTranslate } from "./providers/nanogpt.js";
 import { translateSegments as runwareTranslate } from "./providers/runware.js";
@@ -17,6 +18,7 @@ import { translateSegments as geminiTranslate } from "./providers/gemini.js";
 // 시그니처를 따름.
 const PROVIDERS = {
   openai: openaiTranslate,
+  claude: claudeTranslate,
   openrouter: openrouterTranslate,
   nanogpt: nanogptTranslate,
   // runware 는 팝업 목록에서 숨겼지만, 기존에 선택해 둔 사용자를 위해 레지스트리에는 유지함.

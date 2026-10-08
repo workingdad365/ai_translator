@@ -77,6 +77,51 @@ async function createPopup(stored = {}, items = [], endpointFetch = async () => 
   };
 }
 
+test("Claude 선택과 재실행 시 서비스별 API 키·모델을 보존한다", async () => {
+  const popup = await createPopup({
+    provider: "openai",
+    credentials: {
+      openai: { apiKey: "openai-key", model: "gpt-model" },
+      claude: { apiKey: "claude-key", model: "claude-haiku-4-5" },
+    },
+  });
+  await popup.emit("provider", "change", "claude");
+  assert.equal(popup.element("api-key").value, "claude-key");
+  assert.equal(popup.element("model").value, "claude-haiku-4-5");
+  await popup.emit("model", "change", "claude-sonnet-4-6");
+  await popup.flush();
+  const reopened = await createPopup(popup.storage);
+  assert.equal(reopened.element("provider").value, "claude");
+  assert.equal(reopened.element("model").value, "claude-sonnet-4-6");
+  await reopened.emit("provider", "change", "openai");
+  assert.equal(reopened.element("api-key").value, "openai-key");
+  assert.equal(reopened.element("model").value, "gpt-model");
+});
+
+test("Claude 모델 조회는 전용 인증과 페이지 순회를 사용해 후보를 표시한다", async () => {
+  const popup = await createPopup({ provider: "claude", credentials: { claude: { apiKey: "claude-key" } } });
+  const requests = [];
+  popup.run("globalThis").fetch = async (url, options) => {
+    requests.push({ url, ...options });
+    const page = requests.length === 1
+      ? { data: [{ id: "claude-sonnet-4-6" }], has_more: true, last_id: "claude-sonnet-4-6" }
+      : { data: [{ id: "claude-haiku-4-5" }, { id: "claude-sonnet-4-6" }], has_more: false };
+    return { ok: true, text: async () => JSON.stringify(page) };
+  };
+  await popup.run("fetchModelOptions()");
+  assert.equal(requests.length, 2);
+  assert.equal(requests[0].url, "https://api.anthropic.com/v1/models?limit=1000");
+  assert.match(requests[1].url, /&after_id=claude-sonnet-4-6$/);
+  for (const request of requests) {
+    assert.equal(request.headers["x-api-key"], "claude-key");
+    assert.equal(request.headers["anthropic-version"], "2023-06-01");
+    assert.equal(request.headers["anthropic-dangerous-direct-browser-access"], "true");
+    assert.equal(request.headers.Authorization, undefined);
+  }
+  assert.deepEqual(Array.from(popup.element("model-list").options, (option) => option.value),
+    ["claude-haiku-4-5", "claude-sonnet-4-6"]);
+});
+
 const modelReasoning = {
   optional: { mandatory: false, supported_efforts: ["high", "low", "none"] },
   required: { mandatory: true, supported_efforts: ["high", "low", "minimal"] },

@@ -2,9 +2,9 @@
 
 현재 보고 있는 웹 페이지를 원본 언어와 무관하게 **한국어로 번역**하는 Chrome 확장 프로그램(Manifest V3). 
 
-LLM 프로바이더로 **OpenAI**, **OpenRouter**, **LiteLLM(자체 프록시)**, **Gemini**를 지원하며, 추후 다른 프로바이더로 확장할 수 있도록 설계함. 
+LLM 프로바이더로 **OpenAI**, **Claude**, **OpenRouter**, **LiteLLM(자체 프록시)**, **Gemini**를 지원하며, 추후 다른 프로바이더로 확장할 수 있도록 설계함.
 
-OpenRouter/LiteLLM은 OpenAI 호환 Chat Completions API를, Gemini는 Google의 **Interactions API**를 사용함.
+OpenRouter/LiteLLM은 OpenAI 호환 Chat Completions API를, Claude는 Anthropic의 **Messages API**를, Gemini는 Google의 **Interactions API**를 사용함.
 
 
 
@@ -18,7 +18,8 @@ OpenRouter/LiteLLM은 OpenAI 호환 Chat Completions API를, Gemini는 Google의
 - 뷰포트에 보이는 텍스트부터 번역하며, **스크롤로 새 영역이 나타나면 이어서 번역**함(`IntersectionObserver`).
 - 무한 스크롤 등으로 DOM이 동적으로 추가되면 자동으로 감지해 번역함(`MutationObserver`).
 - 사용자가 **API 키**와 **모델명**을 직접 입력함(예: OpenAI `gpt-5.4-mini`, OpenRouter `deepseek/deepseek-v4-flash`, LiteLLM `translation-model`, Gemini `gemini-3.1-flash-lite`).
-- **프로바이더별 자격증명 저장**: OpenAI/OpenRouter/LiteLLM/Gemini 각각의 API 키·모델을 따로 저장하며, 프로바이더를 전환하면 해당 프로바이더에 저장한 값이 자동으로 표시됨.
+- **프로바이더별 자격증명 저장**: OpenAI/Claude/OpenRouter/LiteLLM/Gemini 각각의 API 키·모델을 따로 저장하며, 프로바이더를 전환하면 해당 프로바이더에 저장한 값이 자동으로 표시됨.
+- **Claude 연동**: Anthropic API 키(`sk-ant-...`)와 모델명(예: `claude-haiku-4-5`)을 입력하거나 **모델 가져오기**로 선택함. 말투·용어집·배치 번역·속도 측정을 공통 지원함. 추론 `없음`은 `thinking.type=disabled`, `최소/낮음`은 `thinking.type=adaptive`와 `output_config.effort=low`로 매핑하며, 미지원 모델은 모델 기본값으로 폴백함. `모델 기본값`은 추론 필드를 생략함.
 - **OpenRouter 실행 제공자 지정**: 모델 선택·입력 확정 시 모델별 엔드포인트를 조회하여 정상 상태(`status: 0`)의 실행 제공자 이름과 slug(예: `groq`, `deepinfra/turbo`)를 검색 후보로 표시함. 후보가 하나면 자동 선택하고 실행 제공자 입력란만 비활성화함. 모델 변경 시 이전 제공자 선택을 초기화하며, 팝업을 다시 열거나 모델 목록을 가져오면 제공자 정보를 재조회함. 지정하면 요청의 `provider.only`로 전달하여 해당 실행 제공자로 제한하고, 비워 두면 OpenRouter 자동 라우팅을 사용함. 후보는 API가 보고하는 상태 기준이며 계정별 허용 제공자·데이터 정책에 따라 실제 요청 가능 여부가 달라질 수 있음. 조회 실패 시 직접 입력을 유지함. LiteLLM은 실행 제공자 지정을 사용하지 않고 프록시의 라우팅을 그대로 씀.
 - **말투 선택**: 페이지 전체를 일관된 **반말(기사체)** 또는 **존댓말(합니다체)** 로 번역하거나, **캐주얼체(게시판)** 로 화자마다 다른 격식과 친밀도를 유지함. 캐주얼체는 Reddit 같은 일반 게시판에 맞춰 반말·해요체·합니다체·높은 존칭을 원문의 태도에 따라 선택하되, 과격한 커뮤니티 고유 말투나 불필요한 비속어를 만들지 않음.
 - **추론 강도 조정**: 추론(reasoning) 모델이 번역 전에 사고 과정을 길게 도는 것을 줄임. 없음(기본)/최소/낮음/모델 기본값 중 선택. 프로바이더별로 올바른 형식(OpenAI·LiteLLM `reasoning_effort`, OpenRouter `reasoning` 객체, Gemini `generation_config.thinking_level`)만 전송함. Gemini에는 완전 비활성 값이 없어 `없음`을 `minimal`로 매핑하며, 모델이 거부하면 모델 기본값으로 자동 폴백함.
@@ -27,7 +28,7 @@ OpenRouter/LiteLLM은 OpenAI 호환 Chat Completions API를, Gemini는 Google의
 - **배치 크기/문자 수 캡 조정**: 한 요청에 담는 세그먼트 수(1~100, 기본 30)와 문자 수 캡(500~20000, 기본 5000)을 설정에서 조정할 수 있음. 배치는 둘 중 먼저 도달하는 쪽에서 끊김. 느린 모델은 작게 잡으면 배치당 응답이 빨라져 타임아웃 위험이 줄어듦.
 - **동시 실행(병렬 요청)**: 한 번의 플러시에서 여러 배치를 동시에 요청함(1~10, 기본 3). 배치들은 서로 독립적으로 치환되므로, 동시 실행 수를 높이면 배치당 왕복 지연이 누적되지 않아 전체 번역이 빨라짐. 레이트리밋(429)이 자주 발생하면 값을 낮춤.
 - **요청 타임아웃 조정**: 배치당 응답 대기 시간(10~300초, 기본 60초)을 설정에서 조정할 수 있음. 초과하면 재시도 없이 실패 처리함.
-- **출력 토큰 자동 산정**: 배치 크기에 비례해 OpenAI/OpenRouter/LiteLLM의 `max_completion_tokens` 또는 Gemini의 `generation_config.max_output_tokens`를 자동 설정함. 추론 토큰까지 고려해 여유분을 더해 잘림을 방지함.
+- **출력 토큰 자동 산정**: 배치 크기에 비례해 OpenAI/OpenRouter/LiteLLM의 `max_completion_tokens`, Claude의 `max_tokens` 또는 Gemini의 `generation_config.max_output_tokens`를 자동 설정함. 추론 토큰까지 고려해 여유분을 더해 잘림을 방지함.
 - **Gemini 구조화 출력**: Interactions API의 `response_format`에 배치 키별 JSON Schema를 제공해 번역 응답 형태를 강제함. 페이지 번역 요청은 대화 상태가 필요 없으므로 `store:false`로 실행함.
 - **디버그 로그**: 설정에서 켜면 요청·응답 상세를 콘솔에 출력하여 간헐적 실패의 원인을 추적할 수 있음(아래 [디버깅](#디버깅) 참고).
 
@@ -66,6 +67,7 @@ ai_translator/
     providers/
       openai-compatible.js  # OpenAI 호환 공통 로직 (프롬프트 구성 + fetch)
       openai.js             # OpenAI 프로바이더 (엔드포인트 지정 래퍼)
+      claude.js             # Claude Messages API 프로바이더
       openrouter.js         # OpenRouter 프로바이더 (엔드포인트 지정 래퍼)
       litellm.js            # LiteLLM 프록시 프로바이더 (엔드포인트 지정 래퍼)
       gemini.js             # Gemini Interactions API 프로바이더
