@@ -275,7 +275,10 @@
   function observeMutationRoot(root) {
     if (!mo || mutationRoots.has(root)) return;
     mutationRoots.add(root);
-    mo.observe(root, { childList: true, characterData: true, subtree: true });
+    mo.observe(root, {
+      childList: true, characterData: true, subtree: true,
+      attributes: true, attributeFilter: ["href", "target", "rel"],
+    });
   }
 
   /**
@@ -328,7 +331,7 @@
       foundBlockCount++;
       if (isStableOverlayTarget(el)) {
         const sourceText = normalizeBlockText(el.textContent);
-        const cached = overlayTranslationCache.get(sourceText);
+        const cached = overlayTranslationCache.get(getBlockSourceKey(el));
         if (cached && applyTranslationOverlay(el, cached.text, cached.html)) {
           translatedBlocks.add(el);
           appliedBlockStates.set(
@@ -426,7 +429,7 @@
         if (state) {
           if (state.overlay) {
             const currentSourceText = normalizeBlockText(el.textContent);
-            if (currentSourceText !== state.sourceText) {
+            if (getBlockSourceKey(el) !== state.sourceKey) {
               clearTranslationOverlay(el);
               appliedBlockStates.delete(el);
               translatedBlocks.delete(el);
@@ -575,14 +578,16 @@
    * @param {string} translatedText - 정규화한 번역문.
    * @param {string} translatedHtml - 정화된 번역 HTML(링크 등 인라인 태그 포함).
    * @param {boolean} overlay - 오버레이 적용 여부.
+   * @param {string} [sourceKey] - 번역 적용 전 원본 HTML 식별자.
    * @returns {object} 적용 상태.
    */
-  function createAppliedState(el, sourceText, translatedText, translatedHtml, overlay) {
+  function createAppliedState(el, sourceText, translatedText, translatedHtml, overlay, sourceKey = getBlockSourceKey(el)) {
     return {
       html: el.innerHTML,
       translatedText,
       translatedHtml,
       sourceText,
+      sourceKey,
       root: el.getRootNode(),
       href: el.tagName === "A" ? el.getAttribute("href") : null,
       reapplyCount: 0,
@@ -620,6 +625,7 @@
     const block = {
       el,
       sourceText: state.sourceText,
+      sourceKey: state.sourceKey,
       root: state.root,
       href: state.href,
     };
@@ -919,6 +925,7 @@
       el,
       html: clone.innerHTML,
       sourceText: normalizeBlockText(el.textContent),
+      sourceKey: getBlockSourceKey(el),
       root: el.getRootNode(),
       href: el.tagName === "A" ? el.getAttribute("href") : null,
       protectedNodes,
@@ -931,10 +938,16 @@
     return (text || "").replace(/\s+/g, " ").trim();
   }
 
+  /** 목록 요약과 상세 본문의 텍스트가 같아도 링크·서식이 다르면 별도 원문으로 취급함. */
+  function getBlockSourceKey(el) {
+    return JSON.stringify([el.tagName, el.getAttribute("href"), el.innerHTML]);
+  }
+
   /** 요청 당시 원문과 현재 요소의 내용 및 링크가 같은지 판별함. */
   function matchesPreparedBlock(el, block) {
     return (
       el.isConnected &&
+      getBlockSourceKey(el) === block.sourceKey &&
       normalizeBlockText(el.textContent) === block.sourceText &&
       (!block.href || el.getAttribute("href") === block.href)
     );
@@ -961,9 +974,7 @@
       const candidates = root.querySelectorAll(block.el.tagName.toLowerCase());
       for (const candidate of candidates) {
         if (
-          candidate.isConnected &&
-          normalizeBlockText(candidate.textContent) === block.sourceText &&
-          (!block.href || candidate.getAttribute("href") === block.href) &&
+          matchesPreparedBlock(candidate, block) &&
           isLeafBlock(candidate)
         ) {
           block.el = candidate;
@@ -1171,13 +1182,13 @@
                 markBlockFailed(block.el);
                 return;
               }
-              overlayTranslationCache.set(block.sourceText, {
+              overlayTranslationCache.set(block.sourceKey, {
                 text: translatedText,
                 html: translatedHtml,
               });
               appliedBlockStates.set(
                 target,
-                createAppliedState(target, block.sourceText, translatedText, translatedHtml, true),
+                createAppliedState(target, block.sourceText, translatedText, translatedHtml, true, block.sourceKey),
               );
             } else {
               target.replaceChildren(restored);
@@ -1190,6 +1201,7 @@
                     translatedText,
                     translatedHtml,
                     false,
+                    block.sourceKey,
                   ),
                 );
               }
