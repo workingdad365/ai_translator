@@ -580,11 +580,17 @@ function extractValidTranslationPrefix(content) {
  * @throws {Error} 사용 가능한 번역 JSON을 찾지 못했을 때.
  */
 export function parseTranslationResponse(content, segments, { debug = false, where = "translation" } = {}) {
+  // 응답 전체를 감싼 코드 블록만 제거한다. 번역 문자열 안의 백틱은 보존한다.
+  const fenced = content.trim().match(/^```(?:json)?[\t ]*\r?\n([\s\S]*?)\r?\n```$/i);
+  if (fenced) {
+    content = fenced[1];
+    logDebug(debug, where, "removed outer JSON code fence");
+  }
   const segmentsLen = segments.length;
   let parsed;
   try {
     parsed = JSON.parse(content);
-  } catch {
+  } catch (parseError) {
     // 일부 모델은 유효한 JSON 객체를 만든 뒤 닫는 중괄호나 설명을 덧붙이기도 함.
     // 문자열 내부 중괄호를 구분하는 스캐너로 선행 객체만 추출해 한 번 복구함.
     const candidate = extractLeadingJsonObject(content);
@@ -619,7 +625,7 @@ export function parseTranslationResponse(content, segments, { debug = false, whe
 
     if (!recovered) {
       const snippet = content ? content.slice(0, 200) : "(empty content)";
-      throw makeError(`failed to parse model response as JSON: ${snippet}`, {
+      throw makeError(`failed to parse model response as JSON: ${snippet} (length=${content.length}; ${parseError.message})`, {
         retryable: !content,
       });
     }

@@ -21,6 +21,27 @@ function thinkingOptions(effort) {
   return {};
 }
 
+/** 입력 인덱스별 문자열을 필수로 지정하여 JSON 출력 형식을 강제함. */
+function translationFormat(segmentCount) {
+  const keys = Array.from({ length: segmentCount }, (_, index) => String(index));
+  return {
+    type: "json_schema",
+    schema: {
+      type: "object",
+      properties: {
+        translations: {
+          type: "object",
+          properties: Object.fromEntries(keys.map((key) => [key, { type: "string" }])),
+          required: keys,
+          additionalProperties: false,
+        },
+      },
+      required: ["translations"],
+      additionalProperties: false,
+    },
+  };
+}
+
 /** Retry-After 헤더의 초 또는 HTTP 날짜를 대기 시간(ms)으로 변환함. */
 function retryAfterMs(value) {
   if (!value) return null;
@@ -79,7 +100,7 @@ async function attemptTranslate({ apiKey, body, segments, timeoutMs, debug }) {
       throw Object.assign(new Error(`Claude API error (${response.status}): ${detail}`), {
         retryable: response.status === 429 || response.status >= 500,
         retryAfterMs: retryAfterMs(response.headers.get("retry-after")),
-        thinkingUnsupported: response.status === 400 && /thinking|effort|output_config/i.test(detail),
+        thinkingUnsupported: response.status === 400 && /thinking|effort/i.test(detail),
       });
     }
     if (!data) {
@@ -89,14 +110,25 @@ async function attemptTranslate({ apiKey, body, segments, timeoutMs, debug }) {
       ? data.content.filter((block) => block?.type === "text" && typeof block.text === "string")
         .map((block) => block.text).join("")
       : "";
-    logDebug(debug, `HTTP ${response.status} in ${Date.now() - startedAt}ms, stop_reason=${data.stop_reason}, content length=${content.length}`);
+    const diagnostics = `stop_reason=${data.stop_reason}, output_tokens=${data.usage?.output_tokens ?? "unknown"}, max_tokens=${body.max_tokens}, content length=${content.length}`;
+    logDebug(debug, `HTTP ${response.status} in ${Date.now() - startedAt}ms, ${diagnostics}`);
     if (data.stop_reason === "refusal") {
       throw new Error("Claude가 번역 요청을 거부했습니다.");
     }
-    return attachUsage(
-      parseTranslationResponse(content, segments, { debug, where: "Claude/translateSegments" }),
-      data.usage,
-    );
+    if (data.stop_reason === "max_tokens") {
+      throw Object.assign(new Error(`Claude 출력 토큰 상한에 도달했습니다. 배치 크기를 줄여 주세요. (${diagnostics})`), {
+        code: "output_truncated", retryable: false,
+      });
+    }
+    try {
+      return attachUsage(
+        parseTranslationResponse(content, segments, { debug, where: "Claude/translateSegments" }),
+        data.usage,
+      );
+    } catch (error) {
+      error.message += ` (${diagnostics})`;
+      throw error;
+    }
   } finally {
     clearTimeout(timer);
   }
@@ -115,6 +147,7 @@ export async function translateSegments({
   const requestTimeoutMs = Number.isFinite(timeoutMs) && timeoutMs > 0
     ? timeoutMs : DEFAULT_REQUEST_TIMEOUT_MS;
   const totalChars = segments.reduce((sum, segment) => sum + segment.length, 0);
+  const thinking = DEFAULT_THINKING_MODELS.has(model) ? {} : thinkingOptions(reasoningEffort);
   const body = {
     model,
     max_tokens: computeMaxTokens(totalChars),
@@ -125,7 +158,8 @@ export async function translateSegments({
         segments.map((segment, index) => [String(index), segment]),
       ) }),
     }],
-    ...(DEFAULT_THINKING_MODELS.has(model) ? {} : thinkingOptions(reasoningEffort)),
+    ...thinking,
+    output_config: { ...thinking.output_config, format: translationFormat(segments.length) },
   };
 
   let retries = 0;
@@ -136,7 +170,7 @@ export async function translateSegments({
     } catch (error) {
       if (error.thinkingUnsupported && body.thinking) {
         delete body.thinking;
-        delete body.output_config;
+        delete body.output_config.effort;
         DEFAULT_THINKING_MODELS.add(model);
         logDebug(debug, "model rejected thinking options; retrying with model default");
         continue;

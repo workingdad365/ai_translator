@@ -39,6 +39,14 @@ test("Claude는 공식 인증과 공통 프롬프트로 요청하고 순서와 �
   assert.deepEqual(JSON.parse(body.messages[0].content), { segments: { 0: "Home", 1: "Models" } });
   assert.deepEqual(body.thinking, { type: "disabled" });
   assert.ok(body.max_tokens > 0);
+  assert.equal(body.output_config.format.type, "json_schema");
+  const schema = body.output_config.format.schema;
+  assert.deepEqual(schema.required, ["translations"]);
+  assert.equal(schema.additionalProperties, false);
+  assert.deepEqual(schema.properties.translations, {
+    type: "object", properties: { 0: { type: "string" }, 1: { type: "string" } },
+    required: ["0", "1"], additionalProperties: false,
+  });
 });
 
 test("Claude 최소·낮음과 모델 기본값을 API에 맞게 변환한다", async (t) => {
@@ -52,10 +60,12 @@ test("Claude 최소·낮음과 모델 기본값을 API에 맞게 변환한다", 
   }
   for (const body of bodies.slice(0, 2)) {
     assert.deepEqual(body.thinking, { type: "adaptive" });
-    assert.deepEqual(body.output_config, { effort: "low" });
+    assert.equal(body.output_config.effort, "low");
+    assert.equal(body.output_config.format.type, "json_schema");
   }
   assert.equal(bodies[2].thinking, undefined);
-  assert.equal(bodies[2].output_config, undefined);
+  assert.equal(bodies[2].output_config.effort, undefined);
+  assert.equal(bodies[2].output_config.format.type, "json_schema");
 });
 
 test("Claude 추론 미지원은 폴백하고 이후 배치에서도 기본값을 사용한다", async (t) => {
@@ -73,7 +83,8 @@ test("Claude 추론 미지원은 폴백하고 이후 배치에서도 기본값�
   assert.equal(bodies[0].thinking.type, "adaptive");
   for (const body of bodies.slice(1)) {
     assert.equal(body.thinking, undefined);
-    assert.equal(body.output_config, undefined);
+    assert.equal(body.output_config.effort, undefined);
+    assert.deepEqual(body.output_config.format, bodies[0].output_config.format);
   }
 });
 
@@ -82,6 +93,41 @@ test("Claude 누락 번역은 원문과 누락 인덱스를 반환한다", async
   const result = await translateSegments(params);
   assert.deepEqual(result, ["Home", "모델"]);
   assert.deepEqual(result.missingIndices, [0]);
+});
+
+test("Claude 출력 스키마 오류는 추론 미지원으로 오인하지 않는다", async (t) => {
+  let calls = 0;
+  t.mock.method(globalThis, "fetch", async () => {
+    calls++;
+    return new Response(JSON.stringify({ error: { message: "invalid output_config.format schema" } }), { status: 400 });
+  });
+  await assert.rejects(translateSegments({ ...params, reasoningEffort: "low" }), /output_config.format/);
+  assert.equal(calls, 1);
+});
+
+test("Claude 토큰 상한 종료는 부분 번역 성공 대신 잘림 오류로 반환한다", async (t) => {
+  let calls = 0;
+  t.mock.method(globalThis, "fetch", async () => {
+    calls++;
+    return new Response(JSON.stringify({
+      content: [{ type: "text", text: '{"translations":{"0":"홈","1":"' }],
+      stop_reason: "max_tokens", usage: { output_tokens: 3013 },
+    }));
+  });
+  await assert.rejects(translateSegments(params), (error) => {
+    assert.equal(error.code, "output_truncated");
+    assert.match(error.message, /stop_reason=max_tokens, output_tokens=3013/);
+    return true;
+  });
+  assert.equal(calls, 1);
+});
+
+test("Claude JSON 오류에는 종료 사유와 토큰 사용량을 포함한다", async (t) => {
+  t.mock.method(globalThis, "fetch", async () => new Response(JSON.stringify({
+    content: [{ type: "text", text: "not JSON" }],
+    stop_reason: "end_turn", usage: { output_tokens: 3 },
+  })));
+  await assert.rejects(translateSegments(params), /stop_reason=end_turn, output_tokens=3/);
 });
 
 test("Claude 429·529는 Retry-After를 적용하고 최대 두 번 재시도한다", async (t) => {

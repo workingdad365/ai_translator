@@ -409,3 +409,18 @@ test("성공 상태의 HTML 응답은 본문을 포함한 API 오류로 처리�
 
   assert.equal(requestCount, 1);
 });
+
+test("JSON 코드 블록을 제거하고 번역 내부의 백틱과 HTML은 보존한다", async () => {
+  const html = '<a href="https://example.test">문서</a>와 ```json 예시';
+  const json = JSON.stringify({ translations: { 0: html } });
+  for (const language of ["json", "JSON", ""]) {
+    assert.deepEqual(await translateWithContent(` \n\`\`\`${language}\r\n${json}\r\n\`\`\`\n `), [html]);
+  }
+});
+
+test("임의 설명문이나 다른 언어 코드 블록에서는 JSON을 추출하지 않는다", async () => {
+  const json = '{"translations":{"0":"홈"}}';
+  for (const text of [`Here is JSON:\n${json}`, `\`\`\`javascript\n${json}\n\`\`\``]) {
+    await assert.rejects(translateWithContent(text), /failed to parse model response as JSON/);
+  }
+});
