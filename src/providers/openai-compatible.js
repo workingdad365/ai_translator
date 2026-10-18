@@ -295,7 +295,7 @@ const REASONING_PREFERENCE = ["none", "minimal", "low", "medium", "high", "xhigh
 
 /**
  * HTTP 400 응답 본문이 response_format(json_object) 미지원 오류인지 판별함.
- * 프로바이더마다 문구가 달라 핵심 키워드로 느슨하게 매칭함. Runware 처럼
+ * 프로바이더마다 문구가 달라 핵심 키워드로 느슨하게 매칭함. 일부 제공자처럼
  * json_object 를 받고도 스키마를 요구하는(`Missing required parameter: 'jsonSchema'`)
  * 경우도 같은 폴백(필드 제거 후 재시도) 대상으로 처리함.
  *

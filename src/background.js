@@ -7,10 +7,6 @@
 import { translateSegments as openaiTranslate } from "./providers/openai.js";
 import { translateSegments as claudeTranslate } from "./providers/claude.js";
 import { translateSegments as openrouterTranslate } from "./providers/openrouter.js";
-import { translateSegments as nanogptTranslate } from "./providers/nanogpt.js";
-import { translateSegments as runwareTranslate } from "./providers/runware.js";
-import { translateSegments as litellmTranslate } from "./providers/litellm.js";
-import { translateSegments as laozhangTranslate } from "./providers/laozhang.js";
 import { translateSegments as geminiTranslate } from "./providers/gemini.js";
 
 // 프로바이더 레지스트리. 향후 확장 시 이 객체에 항목을 추가함.
@@ -20,12 +16,6 @@ const PROVIDERS = {
   openai: openaiTranslate,
   claude: claudeTranslate,
   openrouter: openrouterTranslate,
-  nanogpt: nanogptTranslate,
-  // runware 는 팝업 목록에서 숨겼지만, 기존에 선택해 둔 사용자를 위해 레지스트리에는 유지함.
-  runware: runwareTranslate,
-  litellm: litellmTranslate,
-  // laozhang 도 팝업 목록에서 숨겼지만 동일한 이유로 레지스트리에는 유지함.
-  laozhang: laozhangTranslate,
   gemini: geminiTranslate,
 };
 
@@ -56,7 +46,7 @@ async function getSettings() {
     "model",
   ]);
 
-  const provider = stored.provider || DEFAULT_PROVIDER;
+  const provider = Object.hasOwn(PROVIDERS, stored.provider) ? stored.provider : DEFAULT_PROVIDER;
   const credentials = stored.credentials || {};
   const cred = credentials[provider] || {};
 

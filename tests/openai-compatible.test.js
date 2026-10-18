@@ -2,9 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { buildSystemPrompt, createTranslator } from "../src/providers/openai-compatible.js";
-import { translateSegments as laozhangTranslate } from "../src/providers/laozhang.js";
 import { translateSegments as openrouterTranslate } from "../src/providers/openrouter.js";
-import { translateSegments as runwareTranslate } from "../src/providers/runware.js";
 
 /**
  * 모델 메시지 내용을 고정한 가짜 응답으로 공통 번역기를 실행함.
@@ -362,78 +360,6 @@ test("캐싱을 켜지 않은 프로바이더는 시스템 프롬프트를 문�
   }
 
   assert.equal(typeof requestBody.messages[0].content, "string");
-});
-
-test("LaoZhang AI 요청은 공식 백업 엔드포인트와 max_tokens를 사용한다", async () => {
-  const originalFetch = globalThis.fetch;
-  let requestUrl;
-  let requestOptions;
-  globalThis.fetch = async (url, options) => {
-    requestUrl = url;
-    requestOptions = options;
-    return {
-      ok: true,
-      status: 200,
-      headers: { get: () => null },
-      text: async () => JSON.stringify({
-        choices: [{ finish_reason: "stop", message: { content: '{"translations":{"0":"홈"}}' } }],
-        model: "gpt-4o-mini",
-      }),
-    };
-  };
-
-  try {
-    await laozhangTranslate({
-      apiKey: "laozhang-test-key",
-      model: "gpt-4o-mini",
-      segments: ["Home"],
-      reasoningEffort: "low",
-      timeoutMs: 1000,
-    });
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
-
-  const requestBody = JSON.parse(requestOptions.body);
-  assert.equal(requestUrl, "https://api2.laozhang.ai/v1/chat/completions");
-  assert.equal(requestOptions.headers.Authorization, "Bearer laozhang-test-key");
-  assert.equal(requestOptions.headers["Content-Type"], "application/json");
-  assert.equal(typeof requestBody.max_tokens, "number");
-  assert.equal("max_completion_tokens" in requestBody, false);
-  assert.equal("reasoning_effort" in requestBody, false);
-  assert.equal("reasoning" in requestBody, false);
-});
-
-test("Runware 요청은 스키마를 요구하는 response_format 을 보내지 않는다", async () => {
-  const originalFetch = globalThis.fetch;
-  let requestBody;
-  globalThis.fetch = async (_url, options) => {
-    requestBody = JSON.parse(options.body);
-    return {
-      ok: true,
-      status: 200,
-      headers: { get: () => null },
-      text: async () => JSON.stringify({
-        choices: [{ finish_reason: "stop", message: { content: '{"translations":{"0":"홈"}}' } }],
-        model: "minimax:m2.7@0",
-      }),
-    };
-  };
-
-  try {
-    await runwareTranslate({
-      apiKey: "runware-test-key",
-      model: "minimax:m2.7@0",
-      segments: ["Home"],
-      reasoningEffort: "low",
-      timeoutMs: 1000,
-    });
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
-
-  assert.equal("response_format" in requestBody, false);
-  assert.equal(requestBody.reasoning_effort, "low");
 });
 
 test("jsonSchema 를 요구하는 400 응답은 response_format 을 빼고 재시도한다", async () => {

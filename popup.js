@@ -11,10 +11,6 @@ const AVAILABLE_PROVIDERS = new Set([
   "openai",
   "claude",
   "openrouter",
-  "nanogpt",
-  "runware",
-  "litellm",
-  "laozhang",
   "gemini",
 ]);
 
@@ -34,26 +30,6 @@ const PROVIDER_META = {
     apiKeyHint: "sk-or-...",
     modelHint: "예: deepseek/deepseek-v4-flash",
     modelsEndpoint: "https://openrouter.ai/api/v1/models",
-  },
-  nanogpt: {
-    apiKeyHint: "nano-gpt API 키",
-    modelHint: "예: openai/gpt-5.2",
-    modelsEndpoint: "https://nano-gpt.com/api/v1/models",
-  },
-  runware: {
-    apiKeyHint: "runware API 키",
-    modelHint: "예: minimax:m2.7@0",
-    modelsEndpoint: "https://api.runware.ai/v1/models",
-  },
-  litellm: {
-    apiKeyHint: "LiteLLM 가상 키 (sk-...)",
-    modelHint: "예: ws-gpt",
-    modelsEndpoint: "https://llm.drasys.com/v1/models",
-  },
-  laozhang: {
-    apiKeyHint: "LaoZhang AI API 키",
-    modelHint: "예: gpt-4o-mini",
-    modelsEndpoint: "https://api2.laozhang.ai/v1/models",
   },
   gemini: {
     apiKeyHint: "Google AI Studio API 키",

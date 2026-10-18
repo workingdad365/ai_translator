@@ -14,10 +14,6 @@
     "https://api.openai.com/*",
     "https://api.anthropic.com/*",
     "https://openrouter.ai/*",
-    "https://nano-gpt.com/*",
-    "https://api.runware.ai/*",
-    "https://llm.drasys.com/*",
-    "https://api2.laozhang.ai/*",
     "https://generativelanguage.googleapis.com/*"
   ],
   "background": {

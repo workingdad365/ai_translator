@@ -98,6 +98,21 @@ test("Claude 선택과 재실행 시 서비스별 API 키·모델을 보존한�
   assert.equal(reopened.element("model").value, "gpt-model");
 });
 
+test("제거된 서비스의 저장 설정은 OpenAI 선택으로 복구하고 다른 자격증명을 섞지 않는다", async () => {
+  const popup = await createPopup({
+    provider: "removed-provider",
+    credentials: {
+      "removed-provider": { apiKey: "old-key", model: "old-model" },
+      openai: { apiKey: "openai-key", model: "gpt-model" },
+    },
+  });
+  assert.equal(popup.element("provider").value, "openai");
+  assert.equal(popup.element("api-key").value, "openai-key");
+  assert.equal(popup.element("model").value, "gpt-model");
+  await popup.run("saveSettings()");
+  assert.equal(popup.storage.provider, "openai");
+});
+
 test("Claude 모델 조회는 전용 인증과 페이지 순회를 사용해 후보를 표시한다", async () => {
   const popup = await createPopup({ provider: "claude", credentials: { claude: { apiKey: "claude-key" } } });
   const requests = [];
