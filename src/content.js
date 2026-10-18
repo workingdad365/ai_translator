@@ -1122,6 +1122,15 @@
       if (!resp || resp.error) {
         const reason = resp?.error ?? "알 수 없는 오류(서비스 워커 무응답)";
         logError("content/translateBatch", `provider error: ${reason}`, { segments });
+        if (resp?.errorCode === "no_usable_translations") {
+          // 재시도 후에도 번역이 없으면 이 배치만 실패 처리하고 페이지 번역은 계속함.
+          blocks.forEach((block) => {
+            queuedBlocks.delete(block.el);
+            markBlockFailed(block.el);
+          });
+          showToast("재시도 후에도 번역 결과가 없어 이 부분을 건너뛰고 계속합니다.");
+          return;
+        }
         if (resp?.errorCode === "timeout" && resp.requestStats) {
           const { segmentCount, charCount, timeoutMs } = resp.requestStats;
           showToast(

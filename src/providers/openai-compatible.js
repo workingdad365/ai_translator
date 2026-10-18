@@ -930,6 +930,12 @@ export function createTranslator({
           where,
           `retry ${attempt}/${MAX_RETRIES} in ${delay}ms (previous: ${lastError?.message})`,
         );
+        if (debug && lastError?.code === "no_usable_translations") {
+          console.warn(
+            `[ai_translator ${new Date().toISOString()}] [${where}] ` +
+            `no usable translations; retrying batch once in ${delay}ms`,
+          );
+        }
         await sleep(delay);
       }
 
@@ -993,10 +999,10 @@ export function createTranslator({
           continue;
         }
 
-        // 영구 오류이거나 재시도 소진 시 즉시 실패. 내부 플래그를 뗀 순수 Error 로 재던짐.
+        // 재시도 소진 시 오류 코드를 보존해 호출자가 배치 실패와 세션 중단을 구분함.
         const retryLimit = err.code === "no_usable_translations" ? 1 : MAX_RETRIES;
         if (!err.retryable || attempt >= retryLimit) {
-          throw new Error(err.message);
+          throw makeError(err.message, { code: err.code });
         }
       }
     }

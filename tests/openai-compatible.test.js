@@ -182,7 +182,7 @@ test("번역 결과 없는 응답이 반복되면 한 번의 재시도 후 실�
   const translate = createTranslator({ endpoint: "https://example.test/retry-empty-limit", label: "Test" });
   await assert.rejects(
     translate({ apiKey: "test-key", model: "test/model", segments: ["Home"] }),
-    /response has no usable translations \(top-level keys: none\)/,
+    { code: "no_usable_translations", message: "response has no usable translations (top-level keys: none)" },
   );
   assert.equal(calls, 2);
 });

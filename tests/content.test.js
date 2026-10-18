@@ -6,7 +6,7 @@ import vm from "node:vm";
 const source = await readFile(new URL("../src/content.js", import.meta.url), "utf8");
 const url = "https://get.crackerbox.app/crackerbox/install/";
 
-function createContent() {
+function createContent(responses = []) {
   class Element {
     constructor(html) {
       this.tagName = "P";
@@ -21,14 +21,17 @@ function createContent() {
   }
   const window = {};
   const context = vm.createContext({
-    window, Element,
+    window, Element, performance,
     location: { hostname: "www.reddit.com" },
     chrome: {
       storage: {
         local: { async get() { return {}; } },
         onChanged: { addListener() {} },
       },
-      runtime: { onMessage: { addListener() {} } },
+      runtime: {
+        onMessage: { addListener() {} },
+        async sendMessage() { return responses.shift(); },
+      },
     },
   });
   vm.runInContext(source.replace(/\}\)\(\);\s*$/, `
@@ -37,7 +40,13 @@ function createContent() {
     clearTranslationOverlay = () => { cleared++; };
     scheduleScan = () => { scans++; };
     renderProgress = () => {};
+    showToast = () => {};
+    stopTranslation = () => { active = false; };
+    active = true;
     window.test = {
+      translateBatch, queuedBlocks, failedBlocks,
+      get active() { return active; },
+      get inFlight() { return inFlightBatches; },
       getBlockSourceKey, matchesPreparedBlock, createAppliedState, handleMutations,
       overlayTranslationCache, appliedBlockStates, translatedBlocks,
       get cleared() { return cleared; },
@@ -56,6 +65,32 @@ test("Reddit 목록의 일반 텍스트 캐시를 링크가 있는 상세 본문
   const recreated = new api.Element(detail.innerHTML);
   api.overlayTranslationCache.set(api.getBlockSourceKey(detail), { text: "링크 포함" });
   assert.equal(api.overlayTranslationCache.get(api.getBlockSourceKey(recreated)).text, "링크 포함");
+});
+
+test("번역 결과 없는 배치는 실패 처리하되 페이지 번역과 다음 배치를 유지한다", async () => {
+  const responses = [
+    { error: "response has no usable translations (top-level keys: none)", errorCode: "no_usable_translations" },
+    { translations: [] },
+  ];
+  const api = createContent(responses);
+  const el = new api.Element("Home");
+  api.queuedBlocks.add(el);
+  await api.translateBatch([{ el, html: "Home" }]);
+  assert.equal(api.hooks.active, true);
+  assert.equal(api.failedBlocks.has(el), true);
+  assert.equal(api.queuedBlocks.has(el), false);
+  assert.equal(api.hooks.inFlight, 0);
+  await api.translateBatch([]);
+  assert.equal(responses.length, 0);
+  assert.equal(api.hooks.active, true);
+  assert.equal(api.hooks.inFlight, 0);
+});
+
+test("인증 등 다른 제공자 오류는 기존처럼 페이지 번역을 중단한다", async () => {
+  const api = createContent([{ error: "API error (401)", errorCode: null }]);
+  await api.translateBatch([{ el: new api.Element("Home"), html: "Home" }]);
+  assert.equal(api.hooks.active, false);
+  assert.equal(api.hooks.inFlight, 0);
 });
 
 test("요청 중 같은 텍스트에 링크가 추가되면 이전 번역의 적용을 거부한다", () => {
