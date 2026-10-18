@@ -115,6 +115,90 @@ test("객체 내부가 손상되면 앞의 정상 번역만 적용한다", async
   assert.deepEqual(result.missingIndices, [2, 3]);
 });
 
+test("OpenRouter content 배열 오류는 문자열로 폴백하고 실행 제공자별로 기억한다", async (t) => {
+  const requests = [];
+  const detail = JSON.stringify({ error: {
+    message: "Provider returned error",
+    code: 400,
+    metadata: { raw: JSON.stringify({
+      message: "Failed to apply chat template to messages due to error: Unexpected item type in content.",
+      code: "wrong_api_format", param: "messages",
+    }), provider_name: "Cerebras" },
+  } });
+  t.mock.method(globalThis, "fetch", async (_url, options) => {
+    const body = JSON.parse(options.body);
+    requests.push(body);
+    const rejected = body.provider?.only[0] === "cerebras/fp16" &&
+      Array.isArray(body.messages[0].content);
+    return new Response(rejected ? detail : JSON.stringify({
+      choices: [{ message: { content: '{"translations":{"0":"홈"}}' } }],
+      usage: { prompt_tokens: 100, completion_tokens: 10, total_tokens: 110 },
+    }), { status: rejected ? 400 : 200 });
+  });
+  const params = {
+    apiKey: "test-key", model: "test/content-array-fallback",
+    providerSlug: " Cerebras/FP16 ", segments: ["Home"],
+  };
+  const result = await openrouterTranslate(params);
+  assert.deepEqual(result, ["홈"]);
+  assert.equal(result.usage.outputTokens, 10);
+  assert.equal(requests.length, 2);
+  assert.equal(requests[1].messages[0].content, requests[0].messages[0].content[0].text);
+  assert.deepEqual(requests[1].messages[1], requests[0].messages[1]);
+  assert.deepEqual(requests[1].provider, { only: ["cerebras/fp16"] });
+  assert.deepEqual(requests[1].response_format, { type: "json_object" });
+
+  await openrouterTranslate({ ...params, providerSlug: "cerebras/fp16" });
+  assert.equal(requests.length, 3);
+  assert.equal(typeof requests[2].messages[0].content, "string");
+  await openrouterTranslate({ ...params, providerSlug: "another-provider" });
+  assert.ok(Array.isArray(requests[3].messages[0].content));
+});
+
+test("번역 결과 없는 응답은 지연 후 같은 배치를 한 번 재시도한다", async (t) => {
+  const requests = [];
+  const times = [];
+  t.mock.method(globalThis, "fetch", async (_url, options) => {
+    requests.push(options.body);
+    times.push(Date.now());
+    return new Response(JSON.stringify({ choices: [{ message: {
+      content: requests.length === 1 ? "{}" : '{"translations":{"0":"홈"}}',
+    } }] }));
+  });
+  const translate = createTranslator({ endpoint: "https://example.test/retry-empty", label: "Test" });
+  const result = await translate({ apiKey: "test-key", model: "test/model", segments: ["Home"] });
+  assert.deepEqual(result, ["홈"]);
+  assert.equal(requests.length, 2);
+  assert.equal(requests[0], requests[1]);
+  assert.ok(times[1] - times[0] >= 950);
+});
+
+test("번역 결과 없는 응답이 반복되면 한 번의 재시도 후 실패한다", async (t) => {
+  let calls = 0;
+  t.mock.method(globalThis, "fetch", async () => {
+    calls++;
+    return new Response(JSON.stringify({ choices: [{ message: { content: "{}" } }] }));
+  });
+  const translate = createTranslator({ endpoint: "https://example.test/retry-empty-limit", label: "Test" });
+  await assert.rejects(
+    translate({ apiKey: "test-key", model: "test/model", segments: ["Home"] }),
+    /response has no usable translations \(top-level keys: none\)/,
+  );
+  assert.equal(calls, 2);
+});
+
+test("OpenRouter 문자열 content도 거부되면 재시도를 중단한다", async (t) => {
+  let calls = 0;
+  t.mock.method(globalThis, "fetch", async () => {
+    calls++;
+    return new Response("Unexpected item type in content.", { status: 400 });
+  });
+  await assert.rejects(openrouterTranslate({
+    apiKey: "test-key", model: "test/content-always-rejected", segments: ["Home"],
+  }), /OpenRouter API error \(400\)/);
+  assert.equal(calls, 2);
+});
+
 test("OpenRouter JSON 요청에 응답 치유 플러그인을 포함한다", async () => {
   const originalFetch = globalThis.fetch;
   let requestBody;

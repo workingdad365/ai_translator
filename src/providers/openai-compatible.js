@@ -273,6 +273,9 @@ export function computeMaxTokens(totalChars) {
 // 서비스 워커가 재시작되면 비워지고 다시 학습함.
 const NO_JSON_OBJECT_MODELS = new Set();
 
+// content 배열을 거부한 모델·실행 제공자 조합은 문자열 시스템 메시지를 사용함.
+const STRING_CONTENT_MODELS = new Set();
+
 /**
  * 지정 시간만큼 대기함.
  *
@@ -635,7 +638,7 @@ export function parseTranslationResponse(content, segments, { debug = false, whe
   if (!map) {
     throw makeError(
       `response has no usable translations (top-level keys: ${Object.keys(parsed || {}).join(", ") || "none"})`,
-      { retryable: false },
+      { retryable: true, code: "no_usable_translations" },
     );
   }
 
@@ -723,6 +726,12 @@ async function attemptTranslate({ endpoint, headers, bodyStr, label, debug, wher
 
     // response_format(json_object) 미지원 400 은 상위 루프에서 필드를 빼고 재시도하도록
     // 별도 플래그로 표시함.
+    if (res.status === 400 && /Unexpected item type in content/i.test(detail)) {
+      const err = makeError(`${label} API error (${res.status}): ${detail.slice(0, 300)}`);
+      err.contentArrayUnsupported = true;
+      throw err;
+    }
+
     if (isUnsupportedResponseFormat(res.status, detail)) {
       const err = makeError(`${label} API error (${res.status}): ${detail.slice(0, 300)}`, {
         retryable: false,
@@ -869,10 +878,10 @@ export function createTranslator({
     const systemPrompt = buildSystemPrompt({ tone, glossary });
     // 명시적 프롬프트 캐싱을 지원하는 프로바이더(OpenRouter 경유 Anthropic/Gemini/Qwen 등)는
     // 시스템 프롬프트를 content 배열의 cache_control 브레이크포인트로 표시해 캐싱을 활성화함.
-    // 시스템 프롬프트는 배치마다 동일하므로 두 번째 요청부터 캐시 히트가 기대됨(입력 토큰
-    // 처리 비용/지연 절감). OpenRouter 는 캐싱 미지원 모델로 라우팅되면 이 마커를 자동
-    // 무시하므로 항상 붙여도 안전함. OpenAI 직접 호출은 자동(암묵적) 캐싱이라 문자열로 전송함.
-    const systemContent = cacheSystemPrompt
+    // 배열 형식을 거부한 모델·실행 제공자는 캐시 마커 없이 문자열로 전송함.
+    // OpenAI 직접 호출은 자동(암묵적) 캐싱이라 문자열로 전송함.
+    const contentKey = `${endpoint}|${model}|${providerSlug?.trim().toLowerCase() || ""}`;
+    let systemContent = cacheSystemPrompt && !STRING_CONTENT_MODELS.has(contentKey)
       ? [{ type: "text", text: systemPrompt, cache_control: { type: "ephemeral" } }]
       : systemPrompt;
     // 요청 본문을 구성함.
@@ -944,6 +953,15 @@ export function createTranslator({
       } catch (err) {
         lastError = err;
 
+        // content 배열 미지원 400은 문자열로 한 번 재시도하고 해당 조합을 기억함.
+        if (err.contentArrayUnsupported && Array.isArray(systemContent)) {
+          systemContent = systemPrompt;
+          STRING_CONTENT_MODELS.add(contentKey);
+          logDebug(debug, where, "provider rejected content array; retrying with plain text");
+          attempt--;
+          continue;
+        }
+
         // response_format=json_object 미지원(400) → 해당 필드를 빼고 재시도함.
         // 이 폴백은 정상 재시도 횟수를 소진하지 않으며, 모델을 캐시해 이후 배치는
         // 처음부터 필드를 생략하도록 함.
@@ -976,7 +994,8 @@ export function createTranslator({
         }
 
         // 영구 오류이거나 재시도 소진 시 즉시 실패. 내부 플래그를 뗀 순수 Error 로 재던짐.
-        if (!err.retryable || attempt === MAX_RETRIES) {
+        const retryLimit = err.code === "no_usable_translations" ? 1 : MAX_RETRIES;
+        if (!err.retryable || attempt >= retryLimit) {
           throw new Error(err.message);
         }
       }
