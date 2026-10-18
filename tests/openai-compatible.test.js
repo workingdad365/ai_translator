@@ -187,6 +187,33 @@ test("번역 결과 없는 응답이 반복되면 한 번의 재시도 후 실�
   assert.equal(calls, 2);
 });
 
+for (const recover of [true, false]) {
+  test(`빈 모델 응답은 한 번 재시도 후 ${recover ? "번역을 적용한다" : "배치 건너뛰기 오류 코드를 전달한다"}`, async (t) => {
+    let calls = 0;
+    const requests = [];
+    t.mock.method(globalThis, "fetch", async (_url, options) => {
+      calls++;
+      requests.push(options.body);
+      return new Response(JSON.stringify({ choices: [{ message: {
+        content: recover && calls > 1 ? '{"translations":{"0":"홈"}}' : "",
+      } }] }));
+    });
+    const translate = createTranslator({ endpoint: "https://example.test/empty-content", label: "Test" });
+    const pending = translate({ apiKey: "test-key", model: "test/model", segments: ["Home"] });
+    if (recover) {
+      assert.deepEqual(await pending, ["홈"]);
+    } else {
+      await assert.rejects(pending, (error) => {
+        assert.equal(error.code, "no_usable_translations");
+        assert.match(error.message, /failed to parse model response as JSON: \(empty content\)/);
+        return true;
+      });
+    }
+    assert.equal(calls, 2);
+    assert.equal(requests[0], requests[1]);
+  });
+}
+
 test("OpenRouter 문자열 content도 거부되면 재시도를 중단한다", async (t) => {
   let calls = 0;
   t.mock.method(globalThis, "fetch", async () => {

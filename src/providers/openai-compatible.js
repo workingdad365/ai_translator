@@ -630,6 +630,7 @@ export function parseTranslationResponse(content, segments, { debug = false, whe
       const snippet = content ? content.slice(0, 200) : "(empty content)";
       throw makeError(`failed to parse model response as JSON: ${snippet} (length=${content.length}; ${parseError.message})`, {
         retryable: !content,
+        code: !content ? "no_usable_translations" : null,
       });
     }
   }
