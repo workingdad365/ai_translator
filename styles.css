@@ -254,7 +254,9 @@ body {
   gap: 8px;
 }
 
-.model-picker .secondary-button {
+.settings .model-picker .secondary-button {
+  margin-top: 0;
+  line-height: 1;
   white-space: nowrap;
 }
 
@@ -263,6 +265,10 @@ body {
   margin: 4px 0 0;
   font-size: 11px;
   color: var(--muted);
+}
+
+#model-notice:empty {
+  display: none;
 }
 
 .field-notice[data-kind="error"] {
