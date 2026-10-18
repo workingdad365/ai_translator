@@ -109,6 +109,12 @@ body {
   opacity: 0.65;
 }
 
+.notice,
+.field-notice {
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+
 .notice {
   min-height: 18px;
   margin: 8px 0 0;
