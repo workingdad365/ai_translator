@@ -145,9 +145,9 @@ OpenAI 호환(Chat Completions) API라면 `openai-compatible.js` 의 `createTran
 | `RETRY_BASE_DELAY_MS` | 1000 | 지수 백오프 기본 지연(ms). 실제 지연 = BASE × 2^(재시도-1) + 지터. 429는 `Retry-After` 헤더 우선 |
 | `OUTPUT_TOKENS_PER_CHAR` | 1.3 | 입력 문자당 예상 출력 토큰(한국어, 보수적) |
 | `MAX_TOKENS_BUFFER` | 3000 | 추론/안전 여유분(GPT-5 추론 토큰 포함 대비) |
-| `MAX_TOKENS_FLOOR` / `MAX_TOKENS_CEILING` | 2000 / 16000 | `max_completion_tokens` 산정값의 하한/상한 |
+| `MAX_TOKENS_FLOOR` | 2000 | `max_completion_tokens` 산정값의 하한. 코드의 고정 상한은 없음 |
 
-> `max_completion_tokens` 는 GPT-5 계열에서 **출력 토큰 + 추론 토큰**을 함께 포함하는 상한임. 너무 낮으면 추론이 예산을 소진해 실제 번역이 잘릴 수 있으므로 여유분(`MAX_TOKENS_BUFFER`)을 크게 둠. 문자 수 캡을 매우 크게 올릴 경우 상한(`MAX_TOKENS_CEILING`)과 모델별 최대 출력 한계도 함께 고려해야 함.
+> `max_completion_tokens` 는 GPT-5 계열에서 **출력 토큰 + 추론 토큰**을 함께 포함하는 상한임. 너무 낮으면 추론이 예산을 소진해 실제 번역이 잘릴 수 있으므로 여유분(`MAX_TOKENS_BUFFER`)을 크게 둠. 입력 길이로 산정한 요청값에 고정 상한을 적용하지 않으며, 제공자·모델 자체의 최대 출력 한계는 별도로 적용됨.
 
 ## 제약 및 참고
 

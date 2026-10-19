@@ -254,18 +254,17 @@ const RETRY_BASE_DELAY_MS = 1000;
 const OUTPUT_TOKENS_PER_CHAR = 1.3; // 입력 문자당 예상 출력 토큰(한국어, 보수적)
 const MAX_TOKENS_BUFFER = 3000; // 추론/안전 여유분
 const MAX_TOKENS_FLOOR = 2000; // 하한(작은 배치도 추론 여유 확보)
-const MAX_TOKENS_CEILING = 16000; // 상한(비용/모델 한계 방어)
 
 /**
  * 배치의 총 입력 문자 수로부터 max_completion_tokens 값을 산정함.
  * 추론 토큰까지 포함하는 상한이므로 여유분을 더해 잘림을 방지함.
  *
  * @param {number} totalChars - 배치 내 모든 세그먼트의 문자 수 합.
- * @returns {number} 산정된 max_completion_tokens 값(정수, FLOOR~CEILING 범위).
+ * @returns {number} 산정된 max_completion_tokens 값(정수, FLOOR 이상, 고정 상한 없음).
  */
 export function computeMaxTokens(totalChars) {
   const estimated = Math.ceil(totalChars * OUTPUT_TOKENS_PER_CHAR) + MAX_TOKENS_BUFFER;
-  return Math.min(MAX_TOKENS_CEILING, Math.max(MAX_TOKENS_FLOOR, estimated));
+  return Math.max(MAX_TOKENS_FLOOR, estimated);
 }
 
 // response_format=json_object 를 미지원(400)하는 것으로 확인된 모델 키(`endpoint|model`)
