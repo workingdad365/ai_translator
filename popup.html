@@ -61,6 +61,17 @@
           <p id="model-notice" class="field-notice" role="status" aria-live="polite"></p>
         </div>
 
+        <label id="openrouter-routing-field" class="field" hidden>
+          <span>OpenRouter 라우팅 옵션 (모델 접미사)</span>
+          <select id="openrouter-routing">
+            <option value="">기본 (추가 정렬 없음)</option>
+            <option value="nitro">속도 우선 (:nitro)</option>
+            <option value="floor">가격 우선 (:floor)</option>
+            <option value="exacto">도구 호출 품질 우선 (:exacto)</option>
+          </select>
+          <span class="field-notice">실행 제공자 지정 시 해당 범위에서 적용됩니다. :nitro·:floor는 서비스 티어에 따라 요금이 달라질 수 있습니다.</span>
+        </label>
+
         <label id="openrouter-provider-field" class="field" hidden>
           <span>OpenRouter 실행 제공자 (Provider slug, 선택)</span>
           <input id="openrouter-provider" type="text" list="openrouter-provider-list" autocomplete="off"

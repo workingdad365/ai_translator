@@ -113,6 +113,75 @@ test("제거된 서비스의 저장 설정은 OpenAI 선택으로 복구하고 �
   assert.equal(popup.storage.provider, "openai");
 });
 
+test("OpenRouter 라우팅 선택은 카탈로그 접미사와 수동 추론·실행 제공자를 보존한다", async () => {
+  const urls = [];
+  const popup = await createPopup({
+    provider: "openrouter", reasoningEffort: "low",
+    credentials: { openrouter: { apiKey: "key", model: "test/model:free:nitro", providerSlug: "second" } },
+    openrouterModelReasoning: {
+      "test/model": { mandatory: true, supported_efforts: ["high"] },
+      "test/model:free": { mandatory: false, supported_efforts: ["low", "high"] },
+    },
+  }, [], async (url) => {
+    urls.push(url);
+    return { ok: true, json: async () => ({ data: { endpoints: [
+      { status: 0, tag: "first" }, { status: 0, tag: "second" },
+    ] } }) };
+  });
+  assert.equal(popup.element("openrouter-routing-field").hidden, false);
+  assert.equal(popup.element("openrouter-routing").value, "nitro");
+  assert.equal(popup.select.value, "low");
+  assert.ok(urls[0].endsWith("test/model%3Afree/endpoints"));
+  await popup.emit("openrouter-routing", "change", "floor");
+  await popup.flush();
+  assert.equal(popup.element("model").value, "test/model:free:floor");
+  assert.equal(popup.storage.credentials.openrouter.model, "test/model:free:floor");
+  assert.equal(popup.storage.credentials.openrouter.providerSlug, "second");
+  assert.equal(popup.select.value, "low");
+  assert.equal(urls.length, 1);
+  const reopened = await createPopup(popup.storage);
+  assert.equal(reopened.element("openrouter-routing").value, "floor");
+});
+
+test("수동 조합은 마지막 정렬 접미사를 표시하고 선택 시 정렬 접미사만 교체한다", async () => {
+  const popup = await createPopup({ provider: "openrouter" });
+  await popup.emit("model", "change", "test/model:nitro:free:exacto:online");
+  assert.equal(popup.element("openrouter-routing").value, "exacto");
+  await popup.emit("openrouter-routing", "change", "floor");
+  assert.equal(popup.element("model").value, "test/model:free:online:floor");
+  await popup.emit("openrouter-routing", "change", "");
+  assert.equal(popup.element("model").value, "test/model:free:online");
+  await popup.emit("model", "input", "");
+  assert.equal(popup.element("openrouter-routing").disabled, true);
+});
+
+test("라우팅 접미사는 기본 모델 메타데이터를 사용하되 미지원 free를 유료 모델로 대체하지 않는다", async () => {
+  const popup = await createPopup({
+    provider: "openrouter",
+    openrouterModelReasoning: { "test/model": { mandatory: true, supported_efforts: ["high"] } },
+  });
+  await popup.emit("model", "change", "test/model:nitro");
+  assert.equal(popup.select.value, "high");
+  await popup.emit("model", "change", "test/model:free:nitro");
+  assert.equal(popup.select.value, "default");
+  await popup.run("saveSettings()");
+  assert.equal(popup.storage.credentials.openrouter.model, "test/model:free:nitro");
+});
+
+test("다른 서비스에서는 라우팅 UI를 숨기며 OpenRouter 접미사는 서비스 전환 후 복원한다", async () => {
+  const popup = await createPopup({
+    provider: "openrouter",
+    credentials: { openrouter: { model: "test/model:exacto" }, openai: { model: "gpt-model" } },
+  });
+  await popup.emit("provider", "change", "openai");
+  assert.equal(popup.element("openrouter-routing-field").hidden, true);
+  await popup.emit("openrouter-routing", "change", "floor");
+  assert.equal(popup.element("model").value, "gpt-model");
+  await popup.emit("provider", "change", "openrouter");
+  assert.equal(popup.element("model").value, "test/model:exacto");
+  assert.equal(popup.element("openrouter-routing").value, "exacto");
+});
+
 test("Claude 모델 조회는 전용 인증과 페이지 순회를 사용해 후보를 표시한다", async () => {
   const popup = await createPopup({ provider: "claude", credentials: { claude: { apiKey: "claude-key" } } });
   const requests = [];

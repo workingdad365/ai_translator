@@ -7,6 +7,8 @@
 //   서비스에 저장해 둔 값이 폼에 표시됨.
 
 const DEFAULT_PROVIDER = "openai";
+const OPENROUTER_SORTING_VARIANTS = ["nitro", "floor", "exacto"];
+const OPENROUTER_ROUTING_VARIANTS = new Set([...OPENROUTER_SORTING_VARIANTS, "online"]);
 const AVAILABLE_PROVIDERS = new Set([
   "openai",
   "claude",
@@ -81,6 +83,8 @@ const els = {
   provider: document.getElementById("provider"),
   apiKey: document.getElementById("api-key"),
   model: document.getElementById("model"),
+  openrouterRoutingField: document.getElementById("openrouter-routing-field"),
+  openrouterRouting: document.getElementById("openrouter-routing"),
   openrouterProviderField: document.getElementById("openrouter-provider-field"),
   openrouterProvider: document.getElementById("openrouter-provider"),
   openrouterProviderList: document.getElementById("openrouter-provider-list"),
@@ -231,9 +235,10 @@ function fillCredentialFields(provider) {
   const cred = credentials[provider] || {};
   els.apiKey.value = cred.apiKey || "";
   els.model.value = cred.model || "";
+  syncRoutingSelection();
   els.openrouterProvider.value = provider === "openrouter" ? cred.providerSlug || "" : "";
   els.openrouterProviderField.hidden = provider !== "openrouter";
-  providerSelection = `${provider}:${els.model.value.trim()}`;
+  providerSelection = selectedModelKey();
   providerRequest = null;
   els.openrouterProviderList.replaceChildren();
   els.openrouterProvider.disabled = false;
@@ -252,9 +257,45 @@ function clearModelOptions() {
   notify(els.modelNotice, "");
 }
 
-function updateModelReasoning(reset = false, previous = els.reasoningEffort.value) {
+/** 라우팅 접미사만 제거하며 :free 등 카탈로그 변형은 보존함. */
+function catalogModelId(model) {
+  const [base, ...suffixes] = model.trim().split(":");
+  return [base, ...suffixes.filter((suffix) => !OPENROUTER_ROUTING_VARIANTS.has(suffix))].join(":");
+}
+
+/** 메타데이터와 실행 제공자 목록은 카탈로그 ID를 기준으로 구분함. */
+function selectedModelKey() {
+  const provider = els.provider.value;
   const model = els.model.value.trim();
-  const selection = `${els.provider.value}:${model}`;
+  return `${provider}:${provider === "openrouter" ? catalogModelId(model) : model}`;
+}
+
+/** 기존 수동 입력과 저장 모델의 마지막 정렬 접미사를 선택란에 반영함. */
+function syncRoutingSelection() {
+  const enabled = els.provider.value === "openrouter";
+  els.openrouterRoutingField.hidden = !enabled;
+  const model = els.model.value.trim();
+  els.openrouterRouting.disabled = !model;
+  els.openrouterRouting.value = enabled
+    ? model.split(":").slice(1).filter((suffix) => OPENROUTER_SORTING_VARIANTS.includes(suffix)).at(-1) || ""
+    : "";
+}
+
+/** UI에서 선택한 정렬 접미사만 교체하고 다른 접미사는 유지함. */
+function handleRoutingChange() {
+  if (els.provider.value !== "openrouter") return;
+  const model = els.model.value.trim();
+  const variant = els.openrouterRouting.value;
+  if (!model || (variant && !OPENROUTER_SORTING_VARIANTS.includes(variant))) return;
+  const [base, ...suffixes] = model.split(":");
+  const retained = suffixes.filter((suffix) => !OPENROUTER_SORTING_VARIANTS.includes(suffix));
+  els.model.value = [base, ...retained, ...(variant ? [variant] : [])].join(":");
+  return handleModelChange({ type: "change" });
+}
+
+function updateModelReasoning(reset = false, previous = els.reasoningEffort.value) {
+  const model = els.provider.value === "openrouter" ? catalogModelId(els.model.value) : els.model.value.trim();
+  const selection = selectedModelKey();
   const isOpenRouter = els.provider.value === "openrouter";
   const known = Object.hasOwn(openrouterModelReasoning, model);
   const reasoning = isOpenRouter && known ? openrouterModelReasoning[model] : null;
@@ -298,7 +339,7 @@ function updateModelReasoning(reset = false, previous = els.reasoningEffort.valu
 
 function updateProviderOptions(fetchOptions = true, force = false) {
   const provider = els.provider.value;
-  const model = els.model.value.trim();
+  const model = provider === "openrouter" ? catalogModelId(els.model.value) : els.model.value.trim();
   const apiKey = els.apiKey.value.trim();
   const selection = `${provider}:${model}`;
   if (selection !== providerSelection || force || (providerRequest && providerRequest.apiKey !== apiKey)) {
@@ -315,7 +356,7 @@ function updateProviderOptions(fetchOptions = true, force = false) {
   const request = { apiKey, promise: null };
   providerRequest = request;
   const isCurrent = () => providerRequest === request && els.provider.value === provider &&
-    els.model.value.trim() === model && els.apiKey.value.trim() === apiKey;
+    catalogModelId(els.model.value) === model && els.apiKey.value.trim() === apiKey;
   notify(els.openrouterProviderNotice, "실행 제공자 조회 중...");
   request.promise = (async () => {
     try {
@@ -361,9 +402,10 @@ function updateProviderOptions(fetchOptions = true, force = false) {
 }
 
 function handleModelChange(event) {
+  syncRoutingSelection();
   renderCurrentSelection();
-  const model = els.model.value.trim();
-  const selection = `${els.provider.value}:${model}`;
+  const model = els.provider.value === "openrouter" ? catalogModelId(els.model.value) : els.model.value.trim();
+  const selection = selectedModelKey();
   if (selection !== lastReasoningSelection &&
       (event.type === "change" ||
        (els.provider.value === "openrouter" && Object.hasOwn(openrouterModelReasoning, model)))) {
@@ -566,7 +608,7 @@ async function loadSettings() {
 
   shownProvider = provider;
   fillCredentialFields(provider);
-  lastReasoningSelection = `${provider}:${els.model.value.trim()}`;
+  lastReasoningSelection = selectedModelKey();
   updateModelReasoning(false, cfg.reasoningEffort);
   if (els.reasoningEffort.value !== cfg.reasoningEffort) scheduleAutoSave();
 
@@ -606,7 +648,7 @@ async function refreshStatus() {
  *   선택된 프로바이더의 검증용 설정값(번역 시작 전 필수값 확인에 사용).
  */
 async function saveSettings(updateForm = true) {
-  if (updateForm && `${els.provider.value}:${els.model.value.trim()}` !== lastReasoningSelection) {
+  if (updateForm && selectedModelKey() !== lastReasoningSelection) {
     updateModelReasoning();
   }
   if (updateForm) await updateProviderOptions();
@@ -816,6 +858,7 @@ els.provider.addEventListener("change", () => {
 // 모델을 직접 입력/선택하면 요약 표시도 즉시 갱신함.
 els.model.addEventListener("input", handleModelChange);
 els.model.addEventListener("change", handleModelChange);
+els.openrouterRouting.addEventListener("change", handleRoutingChange);
 
 els.fetchModels.addEventListener("click", fetchModelOptions);
 
