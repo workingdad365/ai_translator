@@ -151,8 +151,39 @@ test("수동 조합은 마지막 정렬 접미사를 표시하고 선택 시 정
   assert.equal(popup.element("model").value, "test/model:free:online:floor");
   await popup.emit("openrouter-routing", "change", "");
   assert.equal(popup.element("model").value, "test/model:free:online");
-  await popup.emit("model", "input", "");
+  await popup.emit("model", "change", "");
   assert.equal(popup.element("openrouter-routing").disabled, true);
+});
+
+test("모델 검색 입력과 자동 저장은 라우팅 select를 건드리지 않고 확정 시 동기화한다", async () => {
+  const popup = await createPopup({
+    provider: "openrouter",
+    credentials: { openrouter: { model: "test/old:nitro" } },
+  });
+  const routing = popup.element("openrouter-routing");
+  const field = popup.element("openrouter-routing-field");
+  let writes = 0;
+  for (const [element, property] of [[routing, "value"], [routing, "disabled"], [field, "hidden"]]) {
+    let value = element[property];
+    Object.defineProperty(element, property, {
+      get() { return value; },
+      set(next) { writes++; value = next; },
+    });
+  }
+  const candidates = popup.element("model-list").options;
+  for (const text of ["", "t", "test/", "test/new", "test/new:floor"]) {
+    await popup.emit("model", "input", text);
+    await popup.flush();
+    assert.equal(writes, 0);
+    assert.equal(popup.element("model-list").options, candidates);
+  }
+  assert.equal(routing.value, "nitro");
+  await popup.emit("model", "change", "test/new:floor");
+  assert.equal(routing.value, "floor");
+  const afterCommit = writes;
+  await popup.run("saveSettings()");
+  assert.equal(writes, afterCommit);
+  assert.equal(popup.storage.credentials.openrouter.model, "test/new:floor");
 });
 
 test("라우팅 접미사는 기본 모델 메타데이터를 사용하되 미지원 free를 유료 모델로 대체하지 않는다", async () => {

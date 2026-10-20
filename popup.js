@@ -273,12 +273,13 @@ function selectedModelKey() {
 /** 기존 수동 입력과 저장 모델의 마지막 정렬 접미사를 선택란에 반영함. */
 function syncRoutingSelection() {
   const enabled = els.provider.value === "openrouter";
-  els.openrouterRoutingField.hidden = !enabled;
+  if (els.openrouterRoutingField.hidden !== !enabled) els.openrouterRoutingField.hidden = !enabled;
   const model = els.model.value.trim();
-  els.openrouterRouting.disabled = !model;
-  els.openrouterRouting.value = enabled
+  if (els.openrouterRouting.disabled !== !model) els.openrouterRouting.disabled = !model;
+  const variant = enabled
     ? model.split(":").slice(1).filter((suffix) => OPENROUTER_SORTING_VARIANTS.includes(suffix)).at(-1) || ""
     : "";
+  if (els.openrouterRouting.value !== variant) els.openrouterRouting.value = variant;
 }
 
 /** UI에서 선택한 정렬 접미사만 교체하고 다른 접미사는 유지함. */
@@ -402,7 +403,8 @@ function updateProviderOptions(fetchOptions = true, force = false) {
 }
 
 function handleModelChange(event) {
-  syncRoutingSelection();
+  // 입력 중 다른 select를 갱신하면 Chrome의 네이티브 datalist가 닫힐 수 있으므로 확정 시 동기화함.
+  if (event.type === "change") syncRoutingSelection();
   renderCurrentSelection();
   const model = els.provider.value === "openrouter" ? catalogModelId(els.model.value) : els.model.value.trim();
   const selection = selectedModelKey();
@@ -648,6 +650,7 @@ async function refreshStatus() {
  *   선택된 프로바이더의 검증용 설정값(번역 시작 전 필수값 확인에 사용).
  */
 async function saveSettings(updateForm = true) {
+  if (updateForm) syncRoutingSelection();
   if (updateForm && selectedModelKey() !== lastReasoningSelection) {
     updateModelReasoning();
   }
